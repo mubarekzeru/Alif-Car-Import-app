@@ -2,7 +2,6 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +77,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.model.Vehicle
 import com.example.ui.components.AddEditVehicleSheet
@@ -138,8 +138,8 @@ fun DashboardScreen(
                             shape = CircleShape,
                             modifier = Modifier.size(36.dp)
                         ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.img_alif_logo),
+                            AsyncImage(
+                                model = R.drawable.img_alif_logo,
                                 contentDescription = "Alif Car Import logo",
                                 modifier = Modifier
                                     .fillMaxSize()

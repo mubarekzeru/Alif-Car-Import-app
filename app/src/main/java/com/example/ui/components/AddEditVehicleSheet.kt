@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,9 @@ import com.example.data.model.Vehicle
 import com.example.data.model.VehicleDraft
 import com.example.data.model.VehicleStatus
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -70,7 +74,9 @@ fun AddEditVehicleSheet(
     onSubmit: (VehicleDraft) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var isProcessingPhoto by remember { mutableStateOf(false) }
 
     var yearInput by remember(editingVehicle?.id) {
         mutableStateOf((editingVehicle?.year ?: 2024L).toString())
@@ -129,8 +135,15 @@ fun AddEditVehicleSheet(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            encodePickedPhotoAsDataUrl(context, uri)?.let { dataUrl ->
-                imageUrlInput = dataUrl
+            isProcessingPhoto = true
+            scope.launch {
+                val dataUrl = withContext(Dispatchers.IO) {
+                    encodePickedPhotoAsDataUrl(context, uri)
+                }
+                if (dataUrl != null) {
+                    imageUrlInput = dataUrl
+                }
+                isProcessingPhoto = false
             }
         }
     }
@@ -544,34 +557,39 @@ fun AddEditVehicleSheet(
                     onClick = {
                         attemptedSubmit = true
                         if (formValid && parsedYear != null && parsedPrice != null) {
-                            val resolvedImageUrl = imageUrlInput.trim().ifEmpty {
-                                encodeDrawableAsDataUrl(context, selectedPreset.studioDrawableRes())
-                                    ?: "https://alifcarimport.com/placeholder.jpg"
-                            }
-                            onSubmit(
-                                VehicleDraft(
-                                    title = titleInput.trim(),
-                                    make = makeInput.trim(),
-                                    model = modelInput.trim(),
-                                    year = parsedYear,
-                                    price = parsedPrice,
-                                    originalPrice = parsedOriginalPrice,
-                                    mileage = mileageInput.trim(),
-                                    transmission = transmissionInput.trim(),
-                                    fuelType = fuelTypeInput.trim(),
-                                    color = colorInput.trim(),
-                                    origin = originInput.trim(),
-                                    imageUrl = resolvedImageUrl,
-                                    galleryImages = editingVehicle?.galleryImages ?: emptyList(),
-                                    description = descriptionInput.trim(),
-                                    tiktokUrl = tiktokUrlInput.trim(),
-                                    status = selectedStatus,
-                                    featured = featured
+                            isProcessingPhoto = true
+                            scope.launch {
+                                val resolvedImageUrl = imageUrlInput.trim().ifEmpty {
+                                    withContext(Dispatchers.IO) {
+                                        encodeDrawableAsDataUrl(context, selectedPreset.studioDrawableRes())
+                                    } ?: "https://alifcarimport.com/placeholder.jpg"
+                                }
+                                isProcessingPhoto = false
+                                onSubmit(
+                                    VehicleDraft(
+                                        title = titleInput.trim(),
+                                        make = makeInput.trim(),
+                                        model = modelInput.trim(),
+                                        year = parsedYear,
+                                        price = parsedPrice,
+                                        originalPrice = parsedOriginalPrice,
+                                        mileage = mileageInput.trim(),
+                                        transmission = transmissionInput.trim(),
+                                        fuelType = fuelTypeInput.trim(),
+                                        color = colorInput.trim(),
+                                        origin = originInput.trim(),
+                                        imageUrl = resolvedImageUrl,
+                                        galleryImages = editingVehicle?.galleryImages ?: emptyList(),
+                                        description = descriptionInput.trim(),
+                                        tiktokUrl = tiktokUrlInput.trim(),
+                                        status = selectedStatus,
+                                        featured = featured
+                                    )
                                 )
-                            )
+                            }
                         }
                     },
-                    enabled = !isSaving,
+                    enabled = !isSaving && !isProcessingPhoto,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
@@ -581,7 +599,7 @@ fun AddEditVehicleSheet(
                         .height(52.dp)
                         .testTag("submit_vehicle_button")
                 ) {
-                    if (isSaving) {
+                    if (isSaving || isProcessingPhoto) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
                             color = MaterialTheme.colorScheme.onPrimary,

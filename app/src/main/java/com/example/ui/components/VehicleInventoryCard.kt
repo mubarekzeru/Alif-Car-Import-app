@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -93,6 +95,14 @@ fun VehicleInventoryCard(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Top
             ) {
+                val context = LocalContext.current
+                val imageRequest = remember(vehicle.id, vehicle.imageUrl) {
+                    val dataModel = vehicle.resolveImageModel()
+                    ImageRequest.Builder(context)
+                        .data(dataModel)
+                        .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
+                        .build()
+                }
                 Box(
                     modifier = Modifier
                         .size(width = 112.dp, height = 84.dp)
@@ -100,7 +110,7 @@ fun VehicleInventoryCard(
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     AsyncImage(
-                        model = vehicle.resolveImageModel(),
+                        model = imageRequest,
                         contentDescription = vehicle.displayTitle,
                         modifier = Modifier.matchParentSize(),
                         contentScale = ContentScale.Crop

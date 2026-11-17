@@ -2,7 +2,6 @@ package com.example.auth
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,13 +47,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import coil.compose.AsyncImage
 import com.example.R
+import kotlinx.coroutines.delay
 
 @Composable
 fun AuthScreen(
@@ -70,6 +70,7 @@ fun AuthScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        delay(150)
         attemptAutoSignIn(
             context = context,
             credentialManager = credentialManager,
@@ -122,8 +123,8 @@ fun AuthScreen(
                     color = Color.White,
                     border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                 ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.img_alif_logo),
+                    AsyncImage(
+                        model = R.drawable.img_alif_logo,
                         contentDescription = stringResource(R.string.app_name),
                         modifier = Modifier
                             .fillMaxSize()

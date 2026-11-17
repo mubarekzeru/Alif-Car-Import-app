@@ -1,0 +1,156 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapOwner() {
+      return isVerifiedUser() && request.auth.token.email == 'alifcarimports@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapOwner() ||
+        (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))) ||
+        (isVerifiedUser() &&
+          exists(/databases/$(database)/documents/config/adminAccess) &&
+          request.auth.token.email in get(/databases/$(database)/documents/config/adminAccess).data.adminEmails);
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidVehicle(vehicleId, data) {
+      return data.keys().hasAll([
+        'id',
+        'title',
+        'make',
+        'model',
+        'year',
+        'price',
+        'mileage',
+        'transmission',
+        'fuelType',
+        'color',
+        'origin',
+        'imageUrl',
+        'description',
+        'tiktokUrl',
+        'status',
+        'featured',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'title',
+        'make',
+        'model',
+        'year',
+        'price',
+        'originalPrice',
+        'mileage',
+        'transmission',
+        'fuelType',
+        'color',
+        'origin',
+        'imageUrl',
+        'galleryImages',
+        'description',
+        'tiktokUrl',
+        'status',
+        'featured',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.id == vehicleId &&
+      isValidId(data.id) &&
+      isValidString(data.title, 1, 200) &&
+      isValidString(data.make, 1, 80) &&
+      isValidString(data.model, 1, 120) &&
+      data.year is number && data.year >= 1950 && data.year <= 2100 &&
+      data.price is number && data.price >= 0 && data.price <= 100000000 &&
+      (!('originalPrice' in data) || (data.originalPrice is number && data.originalPrice >= 0 && data.originalPrice <= 100000000)) &&
+      isValidString(data.mileage, 0, 60) &&
+      isValidString(data.transmission, 0, 80) &&
+      isValidString(data.fuelType, 0, 80) &&
+      isValidString(data.color, 0, 80) &&
+      isValidString(data.origin, 0, 100) &&
+      isValidString(data.imageUrl, 1, 550000) &&
+      (!('galleryImages' in data) || (
+        data.galleryImages is list &&
+        data.galleryImages.size() <= 10 &&
+        (data.galleryImages.size() == 0 || (data.galleryImages[0] is string && data.galleryImages[0].size() <= 550000))
+      )) &&
+      isValidString(data.description, 1, 4000) &&
+      isValidString(data.tiktokUrl, 0, 500) &&
+      data.status in ['available', 'reserved', 'sold'] &&
+      data.featured is bool &&
+      isValidString(data.createdAt, 1, 64) &&
+      data.updatedAt == request.time;
+    }
+
+    match /config/{configId} {
+      allow get: if isValidId(configId);
+      allow list: if false;
+      allow write: if isBootstrapOwner();
+    }
+
+    match /admins/{uid} {
+      allow get: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isBootstrapOwner());
+      allow list, write: if isBootstrapOwner();
+    }
+
+    match /vehicles/{vehicleId} {
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isVerifiedUser() && isValidId(vehicleId) && isValidVehicle(vehicleId, incoming()) && isAdmin();
+      allow update: if isVerifiedUser() && isValidId(vehicleId) && isValidVehicle(vehicleId, incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'make',
+          'model',
+          'year',
+          'price',
+          'originalPrice',
+          'mileage',
+          'transmission',
+          'fuelType',
+          'color',
+          'origin',
+          'imageUrl',
+          'galleryImages',
+          'description',
+          'tiktokUrl',
+          'status',
+          'featured',
+          'updatedAt'
+        ]) && isAdmin();
+      allow delete: if isVerifiedUser() && isValidId(vehicleId) && isAdmin();
+    }
+  }
+}

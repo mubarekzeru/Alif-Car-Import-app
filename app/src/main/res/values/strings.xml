@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Alif Car Import</string>
+    <string name="auth_headline">Alif Car Import</string>
+    <string name="auth_subtitle">Mobile dealership inventory and pricing control synced live with your Alif Car Portal website.</string>
+    <string name="auth_sign_in_google">Sign in with Google</string>
+    <string name="auth_checking_session">Checking admin session…</string>
+    <string name="dashboard_title">Alif Car Import</string>
+    <string name="action_add_vehicle">Add Vehicle</string>
+    <string name="action_search_vehicles">Search make, model, year, origin, or ID</string>
+    <string name="action_sign_out">Sign out</string>
+    <string name="empty_lot_title">No vehicles match this view</string>
+    <string name="empty_lot_subtitle">Tap Add Vehicle to publish a new listing directly to your website and mobile lot.</string>
+    <string name="error_load_inventory">Unable to sync vehicle inventory.</string>
+    <string name="action_retry">Retry</string>
+</resources>

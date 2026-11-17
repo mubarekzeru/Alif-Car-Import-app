@@ -1,0 +1,6 @@
+{
+  "name": "Alif Car Import",
+  "description": "Mobile-first vehicle inventory and admin control panel synced live with the Alif Car Import portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

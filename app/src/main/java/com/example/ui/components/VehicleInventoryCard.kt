@@ -256,6 +256,17 @@ fun VehicleInventoryCard(
                         onDismissRequest = { actionMenuExpanded = false }
                     ) {
                         DropdownMenuItem(
+                            text = { Text("Edit", fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                            },
+                            onClick = {
+                                actionMenuExpanded = false
+                                onEditClick()
+                            },
+                            modifier = Modifier.testTag("vehicle_edit_option_${vehicle.id}")
+                        )
+                        DropdownMenuItem(
                             text = { Text("Quick Price Edit") },
                             leadingIcon = {
                                 Icon(Icons.Default.Edit, contentDescription = null)
@@ -275,16 +286,6 @@ fun VehicleInventoryCard(
                             onClick = {
                                 actionMenuExpanded = false
                                 onToggleFeatured()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Edit Full Details") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Edit, contentDescription = null)
-                            },
-                            onClick = {
-                                actionMenuExpanded = false
-                                onEditClick()
                             }
                         )
                         DropdownMenuItem(

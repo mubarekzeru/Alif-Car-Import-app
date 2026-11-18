@@ -10,7 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,10 +24,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -33,10 +37,13 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -60,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,21 +83,37 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.R
 import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.SecurityLockHelper
+import com.example.data.model.TikTokPost
+import com.example.data.model.Vehicle
 import com.example.ui.theme.EmeraldAvailable
 import com.example.ui.theme.EmeraldContainer
+import com.example.ui.viewmodel.DashboardSection
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsTabContent(
     userEmail: String?,
     brandDisplayName: String,
     brandLogoModel: Any,
+    selectedSection: DashboardSection,
+    vehicles: List<Vehicle>,
+    tikTokPosts: List<TikTokPost>,
+    tikTokHandle: String,
     sessions: List<ActiveDeviceSession>,
     loginAtMillis: Long,
     isMutatingPassword: Boolean,
+    onSelectSection: (DashboardSection) -> Unit,
+    onOpenVehicleDetail: (Vehicle) -> Unit,
+    onOpenEditVehicle: (Vehicle) -> Unit,
+    onOpenQuickPrice: (Vehicle) -> Unit,
+    onDeleteVehicle: (Vehicle) -> Unit,
+    onOpenAddVehicle: () -> Unit,
+    onOpenEditTikTok: (TikTokPost) -> Unit,
+    onDeleteTikTok: (TikTokPost) -> Unit,
+    onOpenAddTikTok: () -> Unit,
     onDeactivateDevice: (String) -> Result<Unit>,
     onChangePassword: (oldPassword: String, newPassword: String, confirmPassword: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onOpenContactSocialLocation: () -> Unit,
@@ -110,6 +134,9 @@ fun SettingsTabContent(
         SecurityLockHelper.remainingLockMillis(loginAtMillis, nowMillis)
     )
 
+    var sectionMenuExpanded by remember { mutableStateOf(true) }
+    var selectedTikTokDetail by remember { mutableStateOf<TikTokPost?>(null) }
+
     var selectedSessionDetail by remember { mutableStateOf<ActiveDeviceSession?>(null) }
     var deviceActionFeedback by remember { mutableStateOf<String?>(null) }
 
@@ -120,157 +147,317 @@ fun SettingsTabContent(
     var passwordVisible by remember { mutableStateOf(false) }
     var passwordMessage by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
-    Box(
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .statusBarsPadding()
             .imePadding(),
         contentAlignment = Alignment.TopCenter
     ) {
-        Column(
+        val vehicleCols = if (maxWidth >= 600.dp) 3 else 2
+        val tikTokCols = if (maxWidth >= 600.dp) 4 else 3
+        val vehicleRows = remember(vehicles, vehicleCols) { vehicles.chunked(vehicleCols) }
+        val tikTokRows = remember(tikTokPosts, tikTokCols) { tikTokPosts.chunked(tikTokCols) }
+
+        val settingsAnchorIndex = remember(
+            selectedSection,
+            vehicleRows.size,
+            tikTokRows.size
+        ) {
+            val mediaItemsCount = when (selectedSection) {
+                DashboardSection.INVENTORY -> if (vehicleRows.isEmpty()) 1 else vehicleRows.size
+                DashboardSection.TIKTOK_VIDEOS -> if (tikTokRows.isEmpty()) 1 else tikTokRows.size
+            }
+            // Header (1) + Switcher (1) + mediaItemsCount
+            2 + mediaItemsCount
+        }
+
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 14.dp,
+                bottom = 108.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 680.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-                .padding(bottom = 108.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .widthIn(max = 720.dp)
         ) {
-            // Luxury Account Header Card matching Screen 3 aesthetic
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+            // 0. Luxury Account Header Card matching Screen 3 aesthetic
+            item(key = "account_header") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shape = MaterialTheme.shapes.large
                 ) {
-                    Surface(
-                        color = Color.White,
-                        shape = CircleShape,
-                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f)),
-                        modifier = Modifier.size(54.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        AsyncImage(
-                            model = brandLogoModel,
-                            contentDescription = brandDisplayName,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(4.dp)
-                                .clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = brandDisplayName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (!userEmail.isNullOrBlank()) {
+                        Surface(
+                            color = Color.White,
+                            shape = CircleShape,
+                            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f)),
+                            modifier = Modifier.size(54.dp)
+                        ) {
+                            AsyncImage(
+                                model = brandLogoModel,
+                                contentDescription = brandDisplayName,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(4.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = userEmail,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = brandDisplayName,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                            if (!userEmail.isNullOrBlank()) {
+                                Text(
+                                    text = userEmail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Surface(
+                            onClick = {
+                                scope.launch {
+                                    listState.animateScrollToItem(settingsAnchorIndex)
+                                }
+                            },
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .height(40.dp)
+                                .testTag("jump_to_account_settings_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Jump to settings",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Settings",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1. Moved Inventory / TikTok Videos selector right above the vehicle & media post cards
+            item(key = "account_section_switcher") {
+                AccountSectionSwitcherCard(
+                    selectedSection = selectedSection,
+                    vehicleCount = vehicles.size,
+                    tikTokCount = tikTokPosts.size,
+                    isExpanded = sectionMenuExpanded,
+                    onToggleExpand = { sectionMenuExpanded = !sectionMenuExpanded },
+                    onSelectSection = { section ->
+                        onSelectSection(section)
+                    }
+                )
+            }
+
+            // 2. Post Cards / Instagram-style Grid directly under the selector
+            if (selectedSection == DashboardSection.INVENTORY) {
+                if (vehicleRows.isEmpty()) {
+                    item(key = "account_empty_inventory") {
+                        AccountEmptyShowcaseCard(
+                            icon = Icons.Default.DirectionsCar,
+                            title = "No vehicles posted yet",
+                            subtitle = "Add a vehicle to showcase it on your website and account lot.",
+                            buttonLabel = "Add Vehicle",
+                            onActionClick = onOpenAddVehicle,
+                            testTag = "account_empty_add_vehicle"
+                        )
+                    }
+                } else {
+                    items(
+                        items = vehicleRows,
+                        key = { row -> "veh_row_${row.joinToString("_") { it.id }}" }
+                    ) { rowVehicles ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            rowVehicles.forEach { vehicle ->
+                                AccountInventoryGridCard(
+                                    vehicle = vehicle,
+                                    onCardClick = { onOpenVehicleDetail(vehicle) },
+                                    onEditClick = { onOpenEditVehicle(vehicle) },
+                                    onQuickPriceClick = { onOpenQuickPrice(vehicle) },
+                                    onDeleteClick = { onDeleteVehicle(vehicle) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(vehicleCols - rowVehicles.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (tikTokRows.isEmpty()) {
+                    item(key = "account_empty_tiktok") {
+                        AccountEmptyShowcaseCard(
+                            icon = Icons.Default.VideoLibrary,
+                            title = "No TikTok videos yet",
+                            subtitle = "Publish a TikTok video link to feature it in an Instagram-style grid here and on your website.",
+                            buttonLabel = "Add TikTok Link",
+                            onActionClick = onOpenAddTikTok,
+                            testTag = "account_empty_add_tiktok"
+                        )
+                    }
+                } else {
+                    items(
+                        items = tikTokRows,
+                        key = { row -> "tiktok_row_${row.joinToString("_") { it.id }}" }
+                    ) { rowPosts ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowPosts.forEach { post ->
+                                TikTokInstagramGridCard(
+                                    post = post,
+                                    onCardClick = { selectedTikTokDetail = post },
+                                    onEditClick = { onOpenEditTikTok(post) },
+                                    onDeleteClick = { onDeleteTikTok(post) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            repeat(tikTokCols - rowPosts.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Divider + Security & Settings Section
+            item(key = "settings_divider_banner") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+
+                    Surface(
+                        color = if (isUnlocked) EmeraldContainer else MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.medium,
+                        border = BorderStroke(
+                            1.dp,
+                            if (isUnlocked) EmeraldAvailable.copy(alpha = 0.45f)
+                            else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isUnlocked) Icons.Default.CheckCircle else Icons.Default.LockClock,
+                                contentDescription = null,
+                                tint = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isUnlocked) {
+                                        "24-Hour Security Actions Unlocked"
+                                    } else {
+                                        "Access will unlock after 24 hours"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = if (isUnlocked) {
+                                        "You can now manage active sessions or change your password."
+                                    } else {
+                                        "Removing other active devices and changing password unlock 24h after sign-in ($remainingCountdown)."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "ACTIVE DEVICES (${sessions.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    deviceActionFeedback?.let { feedback ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = feedback,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
                             )
                         }
                     }
                 }
             }
 
-            // 24-hour unlock status banner
-            Surface(
-                color = if (isUnlocked) EmeraldContainer else MaterialTheme.colorScheme.primaryContainer,
-                shape = MaterialTheme.shapes.medium,
-                border = BorderStroke(
-                    1.dp,
-                    if (isUnlocked) EmeraldAvailable.copy(alpha = 0.45f)
-                    else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.25f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isUnlocked) Icons.Default.CheckCircle else Icons.Default.LockClock,
-                        contentDescription = null,
-                        tint = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
+            if (sessions.isEmpty()) {
+                item(key = "empty_sessions") {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    ) {
                         Text(
-                            text = if (isUnlocked) {
-                                "24-Hour Security Actions Unlocked"
-                            } else {
-                                "Access will unlock after 24 hours"
-                            },
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            text = if (isUnlocked) {
-                                "You can now manage active sessions or change your password."
-                            } else {
-                                "Removing other active devices and changing password unlock 24h after sign-in ($remainingCountdown)."
-                            },
+                            text = "No active admin sessions recorded yet.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
                         )
                     }
                 }
-            }
-
-            // 1. Active Devices Section
-            Text(
-                text = "ACTIVE DEVICES (${sessions.size})",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Bold
-            )
-
-            deviceActionFeedback?.let { feedback ->
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
-                ) {
-                    Text(
-                        text = feedback,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp)
-                    )
-                }
-            }
-
-            if (sessions.isEmpty()) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                ) {
-                    Text(
-                        text = "No active admin sessions recorded yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp)
-                    )
-                }
             } else {
-                sessions.forEach { session ->
+                items(items = sessions, key = { "session_${it.id}" }) { session ->
                     val isCurrent = session.isCurrentDevice
                     Card(
                         colors = CardDefaults.cardColors(
@@ -405,235 +592,254 @@ fun SettingsTabContent(
                 }
             }
 
-            // 2. Change Password Section (24-hour unlock)
-            Text(
-                text = "SECURITY",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Bold
-            )
+            // 4. Security (Change Password) + Portal Management + Sign Out
+            item(key = "security_and_management_footer") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "SECURITY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold
+                    )
 
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                shape = MaterialTheme.shapes.large,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showChangePasswordForm = !showChangePasswordForm }
-                    .testTag("toggle_change_password_section")
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Change Password",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (isUnlocked) {
-                                    "Enter previous password and confirm your new password"
-                                } else {
-                                    "Access will unlock after 24 hours ($remainingCountdown)"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null
-                        )
-                    }
-
-                    AnimatedVisibility(
-                        visible = showChangePasswordForm,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showChangePasswordForm = !showChangePasswordForm }
+                            .testTag("toggle_change_password_section")
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            OutlinedTextField(
-                                value = oldPasswordInput,
-                                onValueChange = { oldPasswordInput = it },
-                                label = { Text("Previous Password") },
-                                singleLine = true,
-                                visualTransformation = if (passwordVisible) {
-                                    VisualTransformation.None
-                                } else {
-                                    PasswordVisualTransformation()
-                                },
-                                trailingIcon = {
-                                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                        Icon(
-                                            imageVector = if (passwordVisible) {
-                                                Icons.Default.VisibilityOff
-                                            } else {
-                                                Icons.Default.Visibility
-                                            },
-                                            contentDescription = "Toggle password visibility"
-                                        )
-                                    }
-                                },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("old_password_input")
-                            )
-                            OutlinedTextField(
-                                value = newPasswordInput,
-                                onValueChange = { newPasswordInput = it },
-                                label = { Text("New Password") },
-                                singleLine = true,
-                                visualTransformation = if (passwordVisible) {
-                                    VisualTransformation.None
-                                } else {
-                                    PasswordVisualTransformation()
-                                },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("new_password_input")
-                            )
-                            OutlinedTextField(
-                                value = confirmPasswordInput,
-                                onValueChange = { confirmPasswordInput = it },
-                                label = { Text("Confirm New Password") },
-                                singleLine = true,
-                                isError = confirmPasswordInput.isNotEmpty() && confirmPasswordInput != newPasswordInput,
-                                visualTransformation = if (passwordVisible) {
-                                    VisualTransformation.None
-                                } else {
-                                    PasswordVisualTransformation()
-                                },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("confirm_password_input")
-                            )
-
-                            passwordMessage?.let { (isOk, msg) ->
-                                Surface(
-                                    color = if (isOk) EmeraldContainer else MaterialTheme.colorScheme.errorContainer,
-                                    shape = MaterialTheme.shapes.small
-                                ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = msg,
+                                        text = "Change Password",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (isUnlocked) {
+                                            "Enter previous password and confirm your new password"
+                                        } else {
+                                            "Access will unlock after 24 hours ($remainingCountdown)"
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (isOk) EmeraldAvailable else MaterialTheme.colorScheme.onErrorContainer,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(10.dp)
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null
+                                )
                             }
 
-                            Button(
-                                onClick = {
-                                    passwordMessage = null
-                                    onChangePassword(
-                                        oldPasswordInput,
-                                        newPasswordInput,
-                                        confirmPasswordInput
-                                    ) { result ->
-                                        result.onSuccess { okMsg ->
-                                            passwordMessage = true to okMsg
-                                            oldPasswordInput = ""
-                                            newPasswordInput = ""
-                                            confirmPasswordInput = ""
-                                        }.onFailure { err ->
-                                            passwordMessage = false to (err.localizedMessage ?: "Failed to change password")
+                            AnimatedVisibility(
+                                visible = showChangePasswordForm,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = oldPasswordInput,
+                                        onValueChange = { oldPasswordInput = it },
+                                        label = { Text("Previous Password") },
+                                        singleLine = true,
+                                        visualTransformation = if (passwordVisible) {
+                                            VisualTransformation.None
+                                        } else {
+                                            PasswordVisualTransformation()
+                                        },
+                                        trailingIcon = {
+                                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                                Icon(
+                                                    imageVector = if (passwordVisible) {
+                                                        Icons.Default.VisibilityOff
+                                                    } else {
+                                                        Icons.Default.Visibility
+                                                    },
+                                                    contentDescription = "Toggle password visibility"
+                                                )
+                                            }
+                                        },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("old_password_input")
+                                    )
+                                    OutlinedTextField(
+                                        value = newPasswordInput,
+                                        onValueChange = { newPasswordInput = it },
+                                        label = { Text("New Password") },
+                                        singleLine = true,
+                                        visualTransformation = if (passwordVisible) {
+                                            VisualTransformation.None
+                                        } else {
+                                            PasswordVisualTransformation()
+                                        },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("new_password_input")
+                                    )
+                                    OutlinedTextField(
+                                        value = confirmPasswordInput,
+                                        onValueChange = { confirmPasswordInput = it },
+                                        label = { Text("Confirm New Password") },
+                                        singleLine = true,
+                                        isError = confirmPasswordInput.isNotEmpty() && confirmPasswordInput != newPasswordInput,
+                                        visualTransformation = if (passwordVisible) {
+                                            VisualTransformation.None
+                                        } else {
+                                            PasswordVisualTransformation()
+                                        },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("confirm_password_input")
+                                    )
+
+                                    passwordMessage?.let { (isOk, msg) ->
+                                        Surface(
+                                            color = if (isOk) EmeraldContainer else MaterialTheme.colorScheme.errorContainer,
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = msg,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (isOk) EmeraldAvailable else MaterialTheme.colorScheme.onErrorContainer,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(10.dp)
+                                            )
                                         }
                                     }
-                                },
-                                enabled = !isMutatingPassword,
-                                shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("submit_change_password_button")
-                            ) {
-                                if (isMutatingPassword) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Updating…")
-                                } else {
-                                    Text("Update Password", fontWeight = FontWeight.Bold)
+
+                                    Button(
+                                        onClick = {
+                                            passwordMessage = null
+                                            onChangePassword(
+                                                oldPasswordInput,
+                                                newPasswordInput,
+                                                confirmPasswordInput
+                                            ) { result ->
+                                                result.onSuccess { okMsg ->
+                                                    passwordMessage = true to okMsg
+                                                    oldPasswordInput = ""
+                                                    newPasswordInput = ""
+                                                    confirmPasswordInput = ""
+                                                }.onFailure { err ->
+                                                    passwordMessage = false to (err.localizedMessage ?: "Failed to change password")
+                                                }
+                                            }
+                                        },
+                                        enabled = !isMutatingPassword,
+                                        shape = CircleShape,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .testTag("submit_change_password_button")
+                                    ) {
+                                        if (isMutatingPassword) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                color = MaterialTheme.colorScheme.onPrimary,
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Updating…")
+                                        } else {
+                                            Text("Update Password", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                 }
                             }
                         }
+                    }
+
+                    Text(
+                        text = "PORTAL MANAGEMENT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    SettingsNavigationRow(
+                        icon = Icons.Default.AdminPanelSettings,
+                        title = "Admin Access",
+                        subtitle = "Manage authorized admin emails for website & app",
+                        onClick = onOpenAdminAccess,
+                        testTag = "settings_admin_access_row"
+                    )
+
+                    SettingsNavigationRow(
+                        icon = Icons.Default.Contacts,
+                        title = "Contact, Social Media & Location",
+                        subtitle = "Edit social media links, contact details, location & working days",
+                        onClick = onOpenContactSocialLocation,
+                        testTag = "settings_contact_social_location_row"
+                    )
+
+                    OutlinedButton(
+                        onClick = onSignOutClick,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("settings_sign_out_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sign Out", fontWeight = FontWeight.Bold)
                     }
                 }
             }
-
-            // 3. Portal Management
-            Text(
-                text = "PORTAL MANAGEMENT",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Bold
-            )
-
-            SettingsNavigationRow(
-                icon = Icons.Default.AdminPanelSettings,
-                title = "Admin Access",
-                subtitle = "Manage authorized admin emails for website & app",
-                onClick = onOpenAdminAccess,
-                testTag = "settings_admin_access_row"
-            )
-
-            SettingsNavigationRow(
-                icon = Icons.Default.Contacts,
-                title = "Contact, Social Media & Location",
-                subtitle = "Edit social media links, contact details, location & working days",
-                onClick = onOpenContactSocialLocation,
-                testTag = "settings_contact_social_location_row"
-            )
-
-            // 4. Sign Out
-            OutlinedButton(
-                onClick = onSignOutClick,
-                shape = CircleShape,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("settings_sign_out_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Logout,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Sign Out", fontWeight = FontWeight.Bold)
-            }
         }
+    }
+
+    // Expanded TikTok Video Detail Modal when tapped
+    selectedTikTokDetail?.let { post ->
+        TikTokPostDetailDialog(
+            post = post,
+            handle = tikTokHandle,
+            onDismiss = { selectedTikTokDetail = null },
+            onEditClick = {
+                selectedTikTokDetail = null
+                onOpenEditTikTok(post)
+            },
+            onDeleteClick = {
+                selectedTikTokDetail = null
+                onDeleteTikTok(post)
+            }
+        )
     }
 
     // Active Device Detail & Remove / Deactivate Dialog

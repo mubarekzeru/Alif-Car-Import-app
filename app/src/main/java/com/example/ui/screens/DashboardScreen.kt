@@ -11,13 +11,10 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -53,14 +50,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -71,7 +65,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -92,7 +85,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -108,7 +100,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.R
 import com.example.data.firebase.InquiriesState
-import com.example.data.model.TikTokPost
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.components.BottomNavTab
@@ -116,13 +107,11 @@ import com.example.ui.components.CustomerInquiriesTabContent
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.LotMetricsStrip
 import com.example.ui.components.SettingsTabContent
-import com.example.ui.components.TikTokPostCard
 import com.example.ui.components.VehicleInventoryCard
 import com.example.ui.components.decodeImageModel
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.theme.WarmCoralTop
 import com.example.ui.theme.WarmPeachWash
-import com.example.ui.viewmodel.DashboardSection
 import com.example.ui.viewmodel.FilterState
 import com.example.ui.viewmodel.InventoryUiState
 import com.example.ui.viewmodel.InventoryViewModel
@@ -172,21 +161,11 @@ fun DashboardScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var sortMenuExpanded by remember { mutableStateOf(false) }
-    var sectionMenuExpanded by remember { mutableStateOf(false) }
     var addMenuExpanded by remember { mutableStateOf(false) }
 
     // Ordered from lowest priority to highest priority (last enabled BackHandler wins)
-    BackHandler(
-        enabled = selectedBottomTab == BottomNavTab.HOME &&
-            dashboardSection == DashboardSection.TIKTOK_VIDEOS
-    ) {
-        portalViewModel.selectDashboardSection(DashboardSection.INVENTORY)
-    }
     BackHandler(enabled = selectedBottomTab != BottomNavTab.HOME) {
         portalViewModel.selectBottomNavTab(BottomNavTab.HOME)
-    }
-    BackHandler(enabled = sectionMenuExpanded) {
-        sectionMenuExpanded = false
     }
     BackHandler(enabled = addMenuExpanded) {
         addMenuExpanded = false
@@ -206,7 +185,7 @@ fun DashboardScreen(
 
     val pendingAlertsCount = portalViewModel.pendingAlertsCount(loginAlerts)
     val inquiryCount = (inquiriesState as? InquiriesState.Success)?.inquiries?.size ?: 0
-    val vehicleCount = (uiState as? InventoryUiState.Success)?.allVehicles?.size ?: 0
+    val allVehicles = (uiState as? InventoryUiState.Success)?.allVehicles.orEmpty()
 
     val brandDisplayName = showroomConfig.branding.companyName
         .trim()
@@ -262,21 +241,10 @@ fun DashboardScreen(
                         uiState = uiState,
                         filterState = filterState,
                         selectedVehicleId = selectedVehicleId,
-                        dashboardSection = dashboardSection,
-                        sectionMenuExpanded = sectionMenuExpanded,
                         sortMenuExpanded = sortMenuExpanded,
-                        vehicleCount = vehicleCount,
-                        tikTokPosts = tikTokPosts,
-                        tikTokHandle = showroomConfig.tiktok.handle,
                         pendingAlertsCount = pendingAlertsCount,
                         brandDisplayName = brandDisplayName,
                         brandLogoRequest = brandLogoRequest,
-                        onToggleSectionMenu = { sectionMenuExpanded = !sectionMenuExpanded },
-                        onDismissSectionMenu = { sectionMenuExpanded = false },
-                        onSelectDashboardSection = { section ->
-                            sectionMenuExpanded = false
-                            portalViewModel.selectDashboardSection(section)
-                        },
                         onSearchQueryChange = viewModel::updateSearchQuery,
                         onToggleSortMenu = { sortMenuExpanded = it },
                         onSelectSortOrder = { order ->
@@ -295,10 +263,7 @@ fun DashboardScreen(
                         onToggleFeatured = viewModel::toggleFeatured,
                         onOpenEditVehicle = onOpenEditVehicle,
                         onDeleteVehicle = viewModel::requestDeleteVehicle,
-                        onOpenAddVehicle = onOpenAddVehicle,
-                        onOpenEditTikTok = onOpenEditTikTok,
-                        onDeleteTikTok = portalViewModel::requestDeleteTikTokPost,
-                        onOpenAddTikTok = onOpenAddTikTok
+                        onOpenAddVehicle = onOpenAddVehicle
                     )
                 }
 
@@ -311,9 +276,22 @@ fun DashboardScreen(
                         userEmail = userEmail,
                         brandDisplayName = brandDisplayName,
                         brandLogoModel = brandLogoRequest,
+                        selectedSection = dashboardSection,
+                        vehicles = allVehicles,
+                        tikTokPosts = tikTokPosts,
+                        tikTokHandle = showroomConfig.tiktok.handle,
                         sessions = sessions,
                         loginAtMillis = currentLoginAtMillis,
                         isMutatingPassword = isChangingPassword,
+                        onSelectSection = portalViewModel::selectDashboardSection,
+                        onOpenVehicleDetail = { vehicle -> onOpenVehicleDetail(vehicle.id) },
+                        onOpenEditVehicle = { vehicle -> onOpenEditVehicle(vehicle.id) },
+                        onOpenQuickPrice = { vehicle -> onOpenQuickPrice(vehicle.id) },
+                        onDeleteVehicle = viewModel::requestDeleteVehicle,
+                        onOpenAddVehicle = onOpenAddVehicle,
+                        onOpenEditTikTok = { post -> onOpenEditTikTok(post.id) },
+                        onDeleteTikTok = portalViewModel::requestDeleteTikTokPost,
+                        onOpenAddTikTok = onOpenAddTikTok,
                         onDeactivateDevice = portalViewModel::deactivateOtherDevice,
                         onChangePassword = portalViewModel::changePassword,
                         onOpenContactSocialLocation = onOpenContactSocialLocation,
@@ -444,18 +422,10 @@ private fun HomeDashboardTab(
     uiState: InventoryUiState,
     filterState: FilterState,
     selectedVehicleId: String?,
-    dashboardSection: DashboardSection,
-    sectionMenuExpanded: Boolean,
     sortMenuExpanded: Boolean,
-    vehicleCount: Int,
-    tikTokPosts: List<TikTokPost>,
-    tikTokHandle: String,
     pendingAlertsCount: Int,
     brandDisplayName: String,
     brandLogoRequest: ImageRequest,
-    onToggleSectionMenu: () -> Unit,
-    onDismissSectionMenu: () -> Unit,
-    onSelectDashboardSection: (DashboardSection) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onToggleSortMenu: (Boolean) -> Unit,
     onSelectSortOrder: (VehicleSortOrder) -> Unit,
@@ -469,17 +439,8 @@ private fun HomeDashboardTab(
     onToggleFeatured: (Vehicle) -> Unit,
     onOpenEditVehicle: (String) -> Unit,
     onDeleteVehicle: (Vehicle) -> Unit,
-    onOpenAddVehicle: () -> Unit,
-    onOpenEditTikTok: (String) -> Unit,
-    onDeleteTikTok: (TikTokPost) -> Unit,
-    onOpenAddTikTok: () -> Unit
+    onOpenAddVehicle: () -> Unit
 ) {
-    val switcherArrowRotation by animateFloatAsState(
-        targetValue = if (sectionMenuExpanded) 180f else 0f,
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "section_arrow_rotation"
-    )
-
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpandedSplit = maxWidth >= 840.dp
         val isMediumGrid = maxWidth in 600.dp..839.dp
@@ -506,7 +467,7 @@ private fun HomeDashboardTab(
                         .padding(top = 10.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Top Row: Section Switcher Pill (Left) + Bell & Profile Logo (Right)
+                    // Top Row: Clean Inventory Title (Left) + Bell & Profile Logo (Right)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -514,46 +475,14 @@ private fun HomeDashboardTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            color = Color.White.copy(alpha = 0.22f),
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.38f)),
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .clickable(onClick = onToggleSectionMenu)
-                                .testTag("section_switcher_button")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                AnimatedContent(
-                                    targetState = dashboardSection,
-                                    transitionSpec = {
-                                        fadeIn(tween(200)) togetherWith fadeOut(tween(150))
-                                    },
-                                    label = "header_section_label"
-                                ) { section ->
-                                    Text(
-                                        text = section.label,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Switch dashboard view",
-                                    tint = Color.White,
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .rotate(switcherArrowRotation)
-                                )
-                            }
-                        }
+                        Text(
+                            text = "Inventory",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -610,7 +539,7 @@ private fun HomeDashboardTab(
                             ) {
                                 AsyncImage(
                                     model = brandLogoRequest,
-                                    contentDescription = "$brandDisplayName settings",
+                                    contentDescription = "$brandDisplayName account",
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(3.dp)
@@ -621,60 +550,9 @@ private fun HomeDashboardTab(
                         }
                     }
 
-                    // Sliding down section switcher under "Inventory v"
-                    AnimatedVisibility(
-                        visible = sectionMenuExpanded,
-                        enter = expandVertically(
-                            expandFrom = Alignment.Top,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
-                                stiffness = Spring.StiffnessMediumLow
-                            )
-                        ) + fadeIn(tween(180)),
-                        exit = shrinkVertically(
-                            shrinkTowards = Alignment.Top,
-                            animationSpec = spring(stiffness = Spring.StiffnessMedium)
-                        ) + fadeOut(tween(140))
-                    ) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                            shape = MaterialTheme.shapes.large,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                SectionSwitchOptionRow(
-                                    icon = Icons.Default.DirectionsCar,
-                                    label = "Inventory",
-                                    count = vehicleCount,
-                                    isSelected = dashboardSection == DashboardSection.INVENTORY,
-                                    onClick = { onSelectDashboardSection(DashboardSection.INVENTORY) },
-                                    testTag = "switch_to_inventory_option"
-                                )
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                SectionSwitchOptionRow(
-                                    icon = Icons.Default.VideoLibrary,
-                                    label = "TikTok Videos",
-                                    count = tikTokPosts.size,
-                                    isSelected = dashboardSection == DashboardSection.TIKTOK_VIDEOS,
-                                    onClick = { onSelectDashboardSection(DashboardSection.TIKTOK_VIDEOS) },
-                                    testTag = "switch_to_tiktok_option"
-                                )
-                            }
-                        }
-                    }
-
                     // Header Metrics inside the warm gradient wash
-                    if (dashboardSection == DashboardSection.INVENTORY && uiState is InventoryUiState.Success) {
+                    if (uiState is InventoryUiState.Success) {
                         LotMetricsStrip(metrics = uiState.metrics)
-                    } else if (dashboardSection == DashboardSection.TIKTOK_VIDEOS) {
-                        TikTokHeaderSummaryCard(
-                            postCount = tikTokPosts.size,
-                            handle = tikTokHandle
-                        )
                     }
                 }
             }
@@ -685,11 +563,7 @@ private fun HomeDashboardTab(
                 onValueChange = onSearchQueryChange,
                 placeholder = {
                     Text(
-                        text = if (dashboardSection == DashboardSection.INVENTORY) {
-                            stringResource(R.string.action_search_vehicles)
-                        } else {
-                            "Search TikTok video title, caption, or link"
-                        },
+                        text = stringResource(R.string.action_search_vehicles),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -720,49 +594,47 @@ private fun HomeDashboardTab(
                                 )
                             }
                         }
-                        if (dashboardSection == DashboardSection.INVENTORY) {
-                            Box {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(38.dp)
+                        Box {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = CircleShape,
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { onToggleSortMenu(true) },
+                                    modifier = Modifier.testTag("sort_menu_button")
                                 ) {
-                                    IconButton(
-                                        onClick = { onToggleSortMenu(true) },
-                                        modifier = Modifier.testTag("sort_menu_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.Sort,
-                                            contentDescription = "Sort vehicles",
-                                            tint = MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Sort,
+                                        contentDescription = "Sort vehicles",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
-                                DropdownMenu(
-                                    expanded = sortMenuExpanded,
-                                    onDismissRequest = { onToggleSortMenu(false) }
-                                ) {
-                                    VehicleSortOrder.entries.forEach { order ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    text = order.label,
-                                                    fontWeight = if (filterState.sortOrder == order) {
-                                                        FontWeight.Bold
-                                                    } else {
-                                                        FontWeight.Normal
-                                                    },
-                                                    color = if (filterState.sortOrder == order) {
-                                                        MaterialTheme.colorScheme.secondary
-                                                    } else {
-                                                        MaterialTheme.colorScheme.onSurface
-                                                    }
-                                                )
-                                            },
-                                            onClick = { onSelectSortOrder(order) }
-                                        )
-                                    }
+                            }
+                            DropdownMenu(
+                                expanded = sortMenuExpanded,
+                                onDismissRequest = { onToggleSortMenu(false) }
+                            ) {
+                                VehicleSortOrder.entries.forEach { order ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = order.label,
+                                                fontWeight = if (filterState.sortOrder == order) {
+                                                    FontWeight.Bold
+                                                } else {
+                                                    FontWeight.Normal
+                                                },
+                                                color = if (filterState.sortOrder == order) {
+                                                    MaterialTheme.colorScheme.secondary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                        },
+                                        onClick = { onSelectSortOrder(order) }
+                                    )
                                 }
                             }
                         }
@@ -783,394 +655,153 @@ private fun HomeDashboardTab(
             )
 
             AnimatedContent(
-                targetState = dashboardSection,
-                transitionSpec = {
-                    (fadeIn(tween(240, easing = TabSlideEasing)) +
-                        expandVertically(tween(240))) togetherWith fadeOut(tween(150))
+                targetState = uiState,
+                contentKey = { state ->
+                    when (state) {
+                        InventoryUiState.Loading -> "loading"
+                        is InventoryUiState.Error -> "error"
+                        is InventoryUiState.Success -> "success"
+                    }
                 },
-                label = "dashboard_section_content",
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(
-                        enabled = sectionMenuExpanded,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onDismissSectionMenu() }
-            ) { activeSection ->
-                when (activeSection) {
-                    DashboardSection.TIKTOK_VIDEOS -> {
-                        val query = filterState.searchQuery.trim().lowercase()
-                        val filteredPosts = remember(tikTokPosts, query) {
-                            if (query.isEmpty()) {
-                                tikTokPosts
-                            } else {
-                                tikTokPosts.filter {
-                                    it.title.lowercase().contains(query) ||
-                                        it.caption.lowercase().contains(query) ||
-                                        it.tiktokUrl.lowercase().contains(query)
-                                }
+                transitionSpec = {
+                    fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
+                        fadeOut(tween(160))
+                },
+                label = "inventory_state_transition",
+                modifier = Modifier.weight(1f)
+            ) { state ->
+                when (state) {
+                    InventoryUiState.Loading -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(bottom = 108.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    text = "Syncing cloud lot inventory…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                        TikTokVideosDashboardContent(
-                            posts = filteredPosts,
-                            isGrid = isMediumGrid || isExpandedSplit,
-                            onEditClick = { post -> onOpenEditTikTok(post.id) },
-                            onDeleteClick = onDeleteTikTok,
-                            onAddTikTokClick = onOpenAddTikTok
-                        )
                     }
 
-                    DashboardSection.INVENTORY -> {
-                        AnimatedContent(
-                            targetState = uiState,
-                            contentKey = { state ->
-                                when (state) {
-                                    InventoryUiState.Loading -> "loading"
-                                    is InventoryUiState.Error -> "error"
-                                    is InventoryUiState.Success -> "success"
-                                }
-                            },
-                            transitionSpec = {
-                                fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
-                                    fadeOut(tween(160))
-                            },
-                            label = "inventory_state_transition"
-                        ) { state ->
-                            when (state) {
-                                InventoryUiState.Loading -> {
+                    is InventoryUiState.Error -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp)
+                                .padding(bottom = 108.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.error_load_inventory),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = state.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    is InventoryUiState.Success -> {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            StatusFilterRow(
+                                selected = filterState.selectedStatus,
+                                metrics = state.metrics,
+                                onSelect = onSelectStatusFilter
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            if (isExpandedSplit) {
+                                val selectedVehicle = state.filteredVehicles.firstOrNull {
+                                    it.id == selectedVehicleId
+                                } ?: state.filteredVehicles.firstOrNull()
+
+                                Row(modifier = Modifier.fillMaxSize()) {
                                     Box(
                                         modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(bottom = 108.dp),
-                                        contentAlignment = Alignment.Center
+                                            .weight(1.1f)
+                                            .fillMaxHeight()
                                     ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                                            Text(
-                                                text = "Syncing cloud lot inventory…",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-
-                                is InventoryUiState.Error -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(24.dp)
-                                            .padding(bottom = 108.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Text(
-                                                text = stringResource(R.string.error_load_inventory),
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = MaterialTheme.colorScheme.error
-                                            )
-                                            Text(
-                                                text = state.message,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                textAlign = TextAlign.Center
-                                            )
-                                        }
-                                    }
-                                }
-
-                                is InventoryUiState.Success -> {
-                                    Column(modifier = Modifier.fillMaxSize()) {
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        StatusFilterRow(
-                                            selected = filterState.selectedStatus,
-                                            metrics = state.metrics,
-                                            onSelect = onSelectStatusFilter
+                                        InventoryFeedContent(
+                                            vehicles = state.filteredVehicles,
+                                            selectedVehicleId = selectedVehicle?.id,
+                                            isGrid = false,
+                                            onCardClick = { onSelectVehicleSplit(it.id) },
+                                            onQuickPriceClick = { onOpenQuickPrice(it.id) },
+                                            onStatusChange = onStatusChange,
+                                            onToggleFeatured = onToggleFeatured,
+                                            onEditClick = { onOpenEditVehicle(it.id) },
+                                            onDeleteClick = onDeleteVehicle,
+                                            onAddVehicleClick = onOpenAddVehicle
                                         )
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                    }
 
-                                        if (isExpandedSplit) {
-                                            val selectedVehicle = state.filteredVehicles.firstOrNull {
-                                                it.id == selectedVehicleId
-                                            } ?: state.filteredVehicles.firstOrNull()
+                                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                                            Row(modifier = Modifier.fillMaxSize()) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .weight(1.1f)
-                                                        .fillMaxHeight()
-                                                ) {
-                                                    InventoryFeedContent(
-                                                        vehicles = state.filteredVehicles,
-                                                        selectedVehicleId = selectedVehicle?.id,
-                                                        isGrid = false,
-                                                        onCardClick = { onSelectVehicleSplit(it.id) },
-                                                        onQuickPriceClick = { onOpenQuickPrice(it.id) },
-                                                        onStatusChange = onStatusChange,
-                                                        onToggleFeatured = onToggleFeatured,
-                                                        onEditClick = { onOpenEditVehicle(it.id) },
-                                                        onDeleteClick = onDeleteVehicle,
-                                                        onAddVehicleClick = onOpenAddVehicle
-                                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(0.9f)
+                                            .fillMaxHeight()
+                                    ) {
+                                        if (selectedVehicle != null) {
+                                            VehicleDetailPane(
+                                                vehicle = selectedVehicle,
+                                                onQuickPriceClick = {
+                                                    onOpenQuickPrice(selectedVehicle.id)
+                                                },
+                                                onStatusChange = { status ->
+                                                    onStatusChange(selectedVehicle, status)
+                                                },
+                                                onToggleFeatured = {
+                                                    onToggleFeatured(selectedVehicle)
+                                                },
+                                                onEditClick = {
+                                                    onOpenEditVehicle(selectedVehicle.id)
+                                                },
+                                                onDeleteClick = {
+                                                    onDeleteVehicle(selectedVehicle)
                                                 }
-
-                                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                                                Box(
-                                                    modifier = Modifier
-                                                        .weight(0.9f)
-                                                        .fillMaxHeight()
-                                                ) {
-                                                    if (selectedVehicle != null) {
-                                                        VehicleDetailPane(
-                                                            vehicle = selectedVehicle,
-                                                            onQuickPriceClick = {
-                                                                onOpenQuickPrice(selectedVehicle.id)
-                                                            },
-                                                            onStatusChange = { status ->
-                                                                onStatusChange(selectedVehicle, status)
-                                                            },
-                                                            onToggleFeatured = {
-                                                                onToggleFeatured(selectedVehicle)
-                                                            },
-                                                            onEditClick = {
-                                                                onOpenEditVehicle(selectedVehicle.id)
-                                                            },
-                                                            onDeleteClick = {
-                                                                onDeleteVehicle(selectedVehicle)
-                                                            }
-                                                        )
-                                                    } else {
-                                                        EmptyLotState(onAddClick = onOpenAddVehicle)
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            InventoryFeedContent(
-                                                vehicles = state.filteredVehicles,
-                                                selectedVehicleId = null,
-                                                isGrid = isMediumGrid,
-                                                onCardClick = { onOpenVehicleDetail(it.id) },
-                                                onQuickPriceClick = { onOpenQuickPrice(it.id) },
-                                                onStatusChange = onStatusChange,
-                                                onToggleFeatured = onToggleFeatured,
-                                                onEditClick = { onOpenEditVehicle(it.id) },
-                                                onDeleteClick = onDeleteVehicle,
-                                                onAddVehicleClick = onOpenAddVehicle
                                             )
+                                        } else {
+                                            EmptyLotState(onAddClick = onOpenAddVehicle)
                                         }
                                     }
                                 }
+                            } else {
+                                InventoryFeedContent(
+                                    vehicles = state.filteredVehicles,
+                                    selectedVehicleId = null,
+                                    isGrid = isMediumGrid,
+                                    onCardClick = { onOpenVehicleDetail(it.id) },
+                                    onQuickPriceClick = { onOpenQuickPrice(it.id) },
+                                    onStatusChange = onStatusChange,
+                                    onToggleFeatured = onToggleFeatured,
+                                    onEditClick = { onOpenEditVehicle(it.id) },
+                                    onDeleteClick = onDeleteVehicle,
+                                    onAddVehicleClick = onOpenAddVehicle
+                                )
                             }
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TikTokHeaderSummaryCard(
-    postCount: Int,
-    handle: String
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        shape = MaterialTheme.shapes.large,
-        shadowElevation = 2.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "TIKTOK VIDEO SHOWCASE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-                Text(
-                    text = "$postCount Published Video Links",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            if (handle.isNotBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = CircleShape
-                ) {
-                    Text(
-                        text = handle,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionSwitchOptionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    count: Int,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-            .testTag(testTag),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Surface(
-            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-            shape = CircleShape
-        ) {
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-            )
-        }
-        if (isSelected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun TikTokVideosDashboardContent(
-    posts: List<TikTokPost>,
-    isGrid: Boolean,
-    onEditClick: (TikTokPost) -> Unit,
-    onDeleteClick: (TikTokPost) -> Unit,
-    onAddTikTokClick: () -> Unit
-) {
-    if (posts.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp)
-                .padding(bottom = 108.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier.size(72.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.VideoLibrary,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
-                }
-                Text(
-                    text = "No TikTok videos yet",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Tap + below to publish a TikTok video link directly to your website showcase.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-                Button(
-                    onClick = onAddTikTokClick,
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier.height(48.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Add TikTok Video Link", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    } else if (isGrid) {
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(items = posts, key = { it.id }) { post ->
-                TikTokPostCard(
-                    post = post,
-                    onEditClick = { onEditClick(post) },
-                    onDeleteClick = { onDeleteClick(post) }
-                )
-            }
-        }
-    } else {
-        LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(items = posts, key = { it.id }) { post ->
-                TikTokPostCard(
-                    post = post,
-                    onEditClick = { onEditClick(post) },
-                    onDeleteClick = { onDeleteClick(post) }
-                )
             }
         }
     }

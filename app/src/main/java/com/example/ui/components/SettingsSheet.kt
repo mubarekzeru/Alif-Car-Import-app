@@ -7,17 +7,21 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -27,13 +31,12 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -42,13 +45,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -63,36 +63,40 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.example.R
 import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.SecurityLockHelper
 import com.example.ui.theme.EmeraldAvailable
 import com.example.ui.theme.EmeraldContainer
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(
+fun SettingsTabContent(
     userEmail: String?,
+    brandDisplayName: String,
+    brandLogoModel: Any,
     sessions: List<ActiveDeviceSession>,
     loginAtMillis: Long,
     isMutatingPassword: Boolean,
     onDeactivateDevice: (String) -> Result<Unit>,
     onChangePassword: (oldPassword: String, newPassword: String, confirmPassword: String, onComplete: (Result<String>) -> Unit) -> Unit,
-    onOpenShowroomConfig: () -> Unit,
+    onOpenContactSocialLocation: () -> Unit,
     onOpenAdminAccess: () -> Unit,
     onSignOutClick: () -> Unit,
-    onDismiss: () -> Unit
+    modifier: Modifier = Modifier
 ) {
-    val sheetState = rememberNonDismissibleSheetState()
-    val scrollLockConnection = rememberSheetScrollLockConnection()
-
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(loginAtMillis) {
         while (true) {
@@ -116,53 +120,67 @@ fun SettingsSheet(
     var passwordVisible by remember { mutableStateOf(false) }
     var passwordMessage by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        dragHandle = null,
-        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .imePadding(),
+        contentAlignment = Alignment.TopCenter
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .nestedScroll(scrollLockConnection)
+                .widthIn(max = 680.dp)
                 .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 20.dp)
-                .padding(top = 18.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .padding(bottom = 108.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Luxury Account Header Card matching Screen 3 aesthetic
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shape = MaterialTheme.shapes.large
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "ACCOUNT & PORTAL",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    if (!userEmail.isNullOrBlank()) {
-                        Text(
-                            text = userEmail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Surface(
+                        color = Color.White,
+                        shape = CircleShape,
+                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f)),
+                        modifier = Modifier.size(54.dp)
+                    ) {
+                        AsyncImage(
+                            model = brandLogoModel,
+                            contentDescription = brandDisplayName,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(4.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
                         )
                     }
-                }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close settings")
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = brandDisplayName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (!userEmail.isNullOrBlank()) {
+                            Text(
+                                text = userEmail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
 
@@ -172,8 +190,8 @@ fun SettingsSheet(
                 shape = MaterialTheme.shapes.medium,
                 border = BorderStroke(
                     1.dp,
-                    if (isUnlocked) EmeraldAvailable.copy(alpha = 0.5f)
-                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                    if (isUnlocked) EmeraldAvailable.copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.25f)
                 )
             ) {
                 Row(
@@ -186,7 +204,7 @@ fun SettingsSheet(
                     Icon(
                         imageVector = if (isUnlocked) Icons.Default.CheckCircle else Icons.Default.LockClock,
                         contentDescription = null,
-                        tint = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.primary
+                        tint = if (isUnlocked) EmeraldAvailable else MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -216,7 +234,7 @@ fun SettingsSheet(
             Text(
                 text = "ACTIVE DEVICES (${sessions.size})",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Bold
             )
 
@@ -239,7 +257,7 @@ fun SettingsSheet(
 
             if (sessions.isEmpty()) {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Text(
@@ -248,23 +266,25 @@ fun SettingsSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp)
+                            .padding(12.dp)
                     )
                 }
             } else {
                 sessions.forEach { session ->
+                    val isCurrent = session.isCurrentDevice
                     Card(
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            containerColor = MaterialTheme.colorScheme.surface
                         ),
                         border = BorderStroke(
-                            width = if (session.isCurrentDevice) 1.5.dp else 1.dp,
-                            color = if (session.isCurrentDevice) {
-                                MaterialTheme.colorScheme.primary
+                            width = 1.dp,
+                            color = if (isCurrent) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
                             } else {
                                 MaterialTheme.colorScheme.outline
                             }
                         ),
+                        shape = MaterialTheme.shapes.medium,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -276,80 +296,127 @@ fun SettingsSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(14.dp),
+                                .padding(
+                                    horizontal = 12.dp,
+                                    vertical = if (isCurrent) 8.dp else 10.dp
+                                ),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Devices,
                                 contentDescription = null,
-                                tint = if (session.isCurrentDevice) {
+                                tint = if (isCurrent) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
-                                }
+                                },
+                                modifier = Modifier.size(if (isCurrent) 16.dp else 18.dp)
                             )
                             Column(
                                 modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Row(
+                                    modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Text(
                                         text = session.deviceName,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
+                                        style = if (isCurrent) {
+                                            MaterialTheme.typography.bodySmall
+                                        } else {
+                                            MaterialTheme.typography.titleSmall
+                                        },
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
-                                    if (session.isCurrentDevice) {
+                                    if (isCurrent) {
                                         Surface(
                                             color = MaterialTheme.colorScheme.primary,
                                             shape = CircleShape
                                         ) {
                                             Text(
-                                                text = "CURRENT DEVICE",
-                                                style = MaterialTheme.typography.labelSmall,
+                                                text = "Current Device",
+                                                fontSize = 9.sp,
+                                                lineHeight = 11.sp,
                                                 color = MaterialTheme.colorScheme.onPrimary,
                                                 fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                                             )
                                         }
                                     }
                                 }
-                                Text(
-                                    text = "${session.platform} • ${session.location}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "Logged in ${formatEpochMillis(session.loginAtMillis)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = session.platform,
+                                        fontSize = 11.sp,
+                                        lineHeight = 14.sp,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "•",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = session.location,
+                                        fontSize = 11.sp,
+                                        lineHeight = 14.sp,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "•",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = formatEpochMillis(session.loginAtMillis),
+                                        fontSize = 11.sp,
+                                        lineHeight = 14.sp,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "View device details"
+                                contentDescription = "View device details",
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
             // 2. Change Password Section (24-hour unlock)
             Text(
                 text = "SECURITY",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Bold
             )
 
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { showChangePasswordForm = !showChangePasswordForm }
@@ -494,6 +561,7 @@ fun SettingsSheet(
                                     }
                                 },
                                 enabled = !isMutatingPassword,
+                                shape = CircleShape,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.primary,
                                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -520,13 +588,11 @@ fun SettingsSheet(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            // 3. Portal Management (Admin Access & Showroom & Contact moved here)
+            // 3. Portal Management
             Text(
                 text = "PORTAL MANAGEMENT",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.Bold
             )
 
@@ -539,19 +605,18 @@ fun SettingsSheet(
             )
 
             SettingsNavigationRow(
-                icon = Icons.Default.Storefront,
-                title = "Showroom & Contact",
-                subtitle = "Edit branding, website hero, TikTok profile, and contact links",
-                onClick = onOpenShowroomConfig,
-                testTag = "settings_showroom_contact_row"
+                icon = Icons.Default.Contacts,
+                title = "Contact, Social Media & Location",
+                subtitle = "Edit social media links, contact details, location & working days",
+                onClick = onOpenContactSocialLocation,
+                testTag = "settings_contact_social_location_row"
             )
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             // 4. Sign Out
             OutlinedButton(
                 onClick = onSignOutClick,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error
                 ),
@@ -612,13 +677,13 @@ fun SettingsSheet(
                         }
                     } else if (session.isCurrentDevice) {
                         Surface(
-                            color = MaterialTheme.colorScheme.primaryContainer,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = MaterialTheme.shapes.small
                         ) {
                             Text(
                                 text = "Protected so you don't accidentally log out your own active phone while managing other sessions.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(10.dp)
                             )
                         }
@@ -664,8 +729,9 @@ private fun SettingsNavigationRow(
     testTag: String
 ) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -678,11 +744,20 @@ private fun SettingsNavigationRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = CircleShape,
+                modifier = Modifier.size(38.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,

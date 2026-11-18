@@ -15,20 +15,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
@@ -46,19 +50,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -87,7 +86,6 @@ import com.example.ui.components.formatMileageDisplay
 import com.example.ui.components.formatTimestamp
 import com.example.ui.theme.JetBrainsMonoFontFamily
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VehicleDetailScreen(
     vehicle: Vehicle?,
@@ -100,49 +98,74 @@ fun VehicleDetailScreen(
 ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = vehicle?.displayTitle ?: "Vehicle Details",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shadowElevation = 2.dp
+                ) {
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.testTag("detail_back_button")
+                        modifier = Modifier
+                            .size(44.dp)
+                            .testTag("detail_back_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back to lot"
+                            contentDescription = "Back to inventory",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-                },
-                actions = {
-                    if (vehicle != null) {
+                }
+
+                Text(
+                    text = "Vehicle Details",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (vehicle != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        shadowElevation = 2.dp
+                    ) {
                         IconButton(
                             onClick = { onToggleFeatured(vehicle) },
-                            modifier = Modifier.testTag("detail_featured_toggle")
+                            modifier = Modifier
+                                .size(44.dp)
+                                .testTag("detail_featured_toggle")
                         ) {
                             Icon(
                                 imageVector = if (vehicle.featured) Icons.Default.Star else Icons.Default.StarBorder,
                                 contentDescription = if (vehicle.featured) "Remove featured" else "Mark featured",
                                 tint = if (vehicle.featured) {
-                                    MaterialTheme.colorScheme.primary
+                                    MaterialTheme.colorScheme.secondary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
-                                }
+                                },
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                )
-            )
+                } else {
+                    Spacer(modifier = Modifier.size(44.dp))
+                }
+            }
         }
     ) { innerPadding ->
         if (vehicle == null) {
@@ -194,505 +217,583 @@ fun VehicleDetailPane(
     }
     var selectedPhotoIndex by remember(vehicle.id, allPhotos.size) { mutableIntStateOf(0) }
     val activePhotoUrl = allPhotos.getOrNull(selectedPhotoIndex) ?: vehicle.imageUrl
+    val context = LocalContext.current
 
-    Column(
-        modifier = modifier
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        val context = LocalContext.current
-        Box(
+    Column(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 10f)
-                .clip(MaterialTheme.shapes.large)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            AnimatedContent(
-                targetState = activePhotoUrl,
-                transitionSpec = {
-                    fadeIn(tween(220)) togetherWith fadeOut(tween(150))
-                },
-                label = "detail_hero_photo"
-            ) { photoUrl ->
-                val decodedModel = remember(photoUrl) { decodeImageModel(photoUrl) }
-                if (decodedModel != null) {
-                    val detailImageRequest = remember(vehicle.id, photoUrl, decodedModel) {
-                        ImageRequest.Builder(context)
-                            .data(decodedModel)
-                            .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
-                            .crossfade(180)
-                            .build()
-                    }
-                    AsyncImage(
-                        model = detailImageRequest,
-                        contentDescription = vehicle.displayTitle,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DirectionsCar,
-                            contentDescription = vehicle.displayTitle,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(56.dp)
-                        )
-                    }
-                }
-            }
-            Surface(
-                color = statusColors.background,
-                shape = CircleShape,
-                border = BorderStroke(1.dp, statusColors.foreground.copy(alpha = 0.5f)),
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(12.dp)
+            // Showcase Hero Card matching Screen 3 ("Car Details")
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shape = MaterialTheme.shapes.large,
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Text(
-                    text = vehicle.statusEnum.label.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusColors.foreground,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-            }
-
-            if (vehicle.featured) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
+                Column(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(12.dp)
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Featured",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = "FEATURED",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
-        if (allPhotos.size > 1) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                itemsIndexed(allPhotos) { index, photo ->
-                    val isSelected = index == selectedPhotoIndex
-                    val thumbBorder by animateColorAsState(
-                        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                        animationSpec = tween(180),
-                        label = "thumb_border"
-                    )
-                    val thumbRequest = remember(vehicle.id, photo) {
-                        ImageRequest.Builder(context)
-                            .data(decodeImageModel(photo))
-                            .memoryCacheKey("veh_thumb_${vehicle.id}_${photo.hashCode()}")
-                            .size(228, 168)
-                            .crossfade(150)
-                            .build()
-                    }
                     Box(
                         modifier = Modifier
-                            .size(width = 76.dp, height = 56.dp)
-                            .clip(MaterialTheme.shapes.small)
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 10f)
+                            .clip(MaterialTheme.shapes.medium)
                             .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = thumbBorder,
-                                shape = MaterialTheme.shapes.small
-                            )
-                            .clickable { selectedPhotoIndex = index }
                     ) {
-                        AsyncImage(
-                            model = thumbRequest,
-                            contentDescription = "Vehicle photo ${index + 1}",
-                            modifier = Modifier.matchParentSize(),
-                            contentScale = ContentScale.Crop
+                        AnimatedContent(
+                            targetState = activePhotoUrl,
+                            transitionSpec = {
+                                fadeIn(tween(220)) togetherWith fadeOut(tween(150))
+                            },
+                            label = "detail_hero_photo"
+                        ) { photoUrl ->
+                            val decodedModel = remember(photoUrl) { decodeImageModel(photoUrl) }
+                            if (decodedModel != null) {
+                                val detailImageRequest = remember(vehicle.id, photoUrl, decodedModel) {
+                                    ImageRequest.Builder(context)
+                                        .data(decodedModel)
+                                        .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
+                                        .crossfade(180)
+                                        .build()
+                                }
+                                AsyncImage(
+                                    model = detailImageRequest,
+                                    contentDescription = vehicle.displayTitle,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DirectionsCar,
+                                        contentDescription = vehicle.displayTitle,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                            shape = CircleShape,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(statusColors.foreground)
+                                )
+                                Text(
+                                    text = vehicle.statusEnum.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColors.foreground,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        if (vehicle.featured) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = "Featured",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = "Featured",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (allPhotos.size > 1) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(allPhotos) { index, photo ->
+                                val isSelected = index == selectedPhotoIndex
+                                val thumbBorder by animateColorAsState(
+                                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    animationSpec = tween(180),
+                                    label = "thumb_border"
+                                )
+                                val thumbRequest = remember(vehicle.id, photo) {
+                                    ImageRequest.Builder(context)
+                                        .data(decodeImageModel(photo))
+                                        .memoryCacheKey("veh_thumb_${vehicle.id}_${photo.hashCode()}")
+                                        .size(228, 168)
+                                        .crossfade(150)
+                                        .build()
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(width = 72.dp, height = 52.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .border(
+                                            width = if (isSelected) 2.dp else 1.dp,
+                                            color = thumbBorder,
+                                            shape = MaterialTheme.shapes.small
+                                        )
+                                        .clickable { selectedPhotoIndex = index }
+                                ) {
+                                    AsyncImage(
+                                        model = thumbRequest,
+                                        contentDescription = "Vehicle photo ${index + 1}",
+                                        modifier = Modifier.matchParentSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Title + Price side-by-side row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = vehicle.displayTitle,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val subtitleParts = listOfNotNull(
+                                vehicle.year.takeIf { it > 0 }?.toString(),
+                                vehicle.make.takeIf { it.isNotBlank() },
+                                vehicle.model.takeIf { it.isNotBlank() },
+                                vehicle.origin.takeIf { it.isNotBlank() }
+                            )
+                            if (subtitleParts.isNotEmpty()) {
+                                Text(
+                                    text = subtitleParts.joinToString(" • "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = formatCurrency(vehicle.price),
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 21.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val oldPrice = vehicle.originalPrice
+                            if (oldPrice != null && oldPrice > vehicle.price) {
+                                Text(
+                                    text = formatCurrency(oldPrice),
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontSize = 12.sp,
+                                    textDecoration = TextDecoration.LineThrough,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Availability Status & Featured Control
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Availability Status",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    VehicleStatus.entries.forEach { option ->
+                        val isSelected = vehicle.statusEnum == option
+                        val optionColors = option.colors()
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onStatusChange(option) },
+                            shape = CircleShape,
+                            label = { Text(option.label, fontWeight = FontWeight.SemiBold) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = optionColors.background,
+                                selectedLabelColor = optionColors.foreground,
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) optionColors.foreground.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("detail_status_${option.value}")
+                        )
+                    }
+                }
+
+                FilterChip(
+                    selected = vehicle.featured,
+                    onClick = onToggleFeatured,
+                    shape = CircleShape,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (vehicle.featured) Icons.Default.Star else Icons.Default.StarBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = if (vehicle.featured) "Featured on Website Showcase" else "Pin as Featured on Website",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                        selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        labelColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .testTag("detail_featured_chip")
+                )
+            }
+
+            // Key Specs 2-column grid matching Screen 3 ("Key Specs")
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Key Specs",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KeySpecTile(
+                        icon = Icons.Default.Speed,
+                        label = "Mileage",
+                        value = formatMileageDisplay(vehicle.mileage),
+                        mono = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
+                        icon = Icons.Default.Settings,
+                        label = "Transmission",
+                        value = vehicle.transmission.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KeySpecTile(
+                        icon = Icons.Default.LocalGasStation,
+                        label = "Fuel Type",
+                        value = vehicle.fuelType.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
+                        icon = Icons.Default.Palette,
+                        label = "Exterior Color",
+                        value = vehicle.color.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KeySpecTile(
+                        icon = Icons.Default.Public,
+                        label = "Import Origin",
+                        value = vehicle.origin.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
+                        icon = Icons.Default.DirectionsCar,
+                        label = "Photos",
+                        value = "${(vehicle.galleryImages.size + if (vehicle.imageUrl.isNotBlank()) 1 else 0)} photo(s)",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KeySpecTile(
+                        icon = Icons.Default.Tag,
+                        label = "Listing ID",
+                        value = vehicle.id.ifBlank { "Pending" },
+                        mono = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
+                        icon = Icons.Default.Schedule,
+                        label = "Last Updated",
+                        value = formatTimestamp(vehicle.updatedAt, vehicle.createdAt),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            if (vehicle.description.isNotBlank()) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Listing Description",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = vehicle.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
-        }
 
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = vehicle.displayTitle,
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            val subtitleParts = listOfNotNull(
-                vehicle.year.takeIf { it > 0 }?.toString(),
-                vehicle.make.takeIf { it.isNotBlank() },
-                vehicle.model.takeIf { it.isNotBlank() },
-                vehicle.origin.takeIf { it.isNotBlank() }
-            )
-            if (subtitleParts.isNotEmpty()) {
-                Text(
-                    text = subtitleParts.joinToString(" • "),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
-            shape = MaterialTheme.shapes.large
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "ASKING PRICE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            if (vehicle.tiktokUrl.isNotBlank()) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shape = MaterialTheme.shapes.large
+                ) {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = formatCurrency(vehicle.price),
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 26.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        val oldPrice = vehicle.originalPrice
-                        if (oldPrice != null && oldPrice > vehicle.price) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = CircleShape,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.VideoLibrary,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = formatCurrency(oldPrice),
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontSize = 14.sp,
-                                textDecoration = TextDecoration.LineThrough,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "TikTok Walkaround",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = vehicle.tiktokUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
-                Button(
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+
+        // Pinned Luxury Bottom Action Bar matching Screen 3
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 6.dp
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    onClick = onDeleteClick,
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .size(50.dp)
+                        .testTag("detail_delete_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Remove vehicle",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Surface(
                     onClick = onQuickPriceClick,
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .size(50.dp)
+                        .testTag("detail_quick_price_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.AttachMoney,
+                            contentDescription = "Adjust price",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onEditClick,
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     modifier = Modifier
-                        .height(48.dp)
-                        .testTag("detail_quick_price_button")
+                        .weight(1f)
+                        .height(50.dp)
+                        .testTag("detail_edit_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Adjust Price", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                text = "AVAILABILITY STATUS",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                VehicleStatus.entries.forEach { option ->
-                    val optionColors = option.colors()
-                    FilterChip(
-                        selected = vehicle.statusEnum == option,
-                        onClick = { onStatusChange(option) },
-                        label = { Text(option.label) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = optionColors.background,
-                            selectedLabelColor = optionColors.foreground
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .testTag("detail_status_${option.value}")
-                    )
-                }
-            }
-        }
-
-        FilterChip(
-            selected = vehicle.featured,
-            onClick = onToggleFeatured,
-            leadingIcon = {
-                Icon(
-                    imageVector = if (vehicle.featured) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-            },
-            label = {
-                Text(
-                    text = if (vehicle.featured) "Featured on Website Showcase" else "Pin as Featured on Website",
-                    fontWeight = FontWeight.SemiBold
-                )
-            },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                selectedLabelColor = MaterialTheme.colorScheme.primary,
-                selectedLeadingIconColor = MaterialTheme.colorScheme.primary
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .testTag("detail_featured_chip")
-        )
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            shape = MaterialTheme.shapes.large
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "VEHICLE SPECIFICATIONS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SpecRow(
-                    icon = Icons.Default.Tag,
-                    label = "Listing ID",
-                    value = vehicle.id.ifBlank { "Pending" },
-                    mono = true
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.Speed,
-                    label = "Mileage",
-                    value = formatMileageDisplay(vehicle.mileage),
-                    mono = true
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.Settings,
-                    label = "Transmission",
-                    value = vehicle.transmission.ifBlank { "Not specified" },
-                    mono = false
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.LocalGasStation,
-                    label = "Fuel Type",
-                    value = vehicle.fuelType.ifBlank { "Not specified" },
-                    mono = false
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.Palette,
-                    label = "Exterior Color",
-                    value = vehicle.color.ifBlank { "Not specified" },
-                    mono = false
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.Public,
-                    label = "Import Origin",
-                    value = vehicle.origin.ifBlank { "Not specified" },
-                    mono = false
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.DirectionsCar,
-                    label = "Gallery Photos",
-                    value = "${(vehicle.galleryImages.size + if (vehicle.imageUrl.isNotBlank()) 1 else 0)} photo(s)",
-                    mono = false
-                )
-                SpecDivider()
-                SpecRow(
-                    icon = Icons.Default.Schedule,
-                    label = "Last Updated",
-                    value = formatTimestamp(vehicle.updatedAt, vehicle.createdAt),
-                    mono = false
-                )
-            }
-        }
-
-        if (vehicle.description.isNotBlank()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "LISTING DESCRIPTION",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = vehicle.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-
-        if (vehicle.tiktokUrl.isNotBlank()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VideoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp)
                     )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "TIKTOK WALKAROUND",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = vehicle.tiktokUrl,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Edit Details", fontWeight = FontWeight.Bold)
                 }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            OutlinedButton(
-                onClick = onEditClick,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(50.dp)
-                    .testTag("detail_edit_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Edit Details")
-            }
-
-            OutlinedButton(
-                onClick = onDeleteClick,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(50.dp)
-                    .testTag("detail_delete_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.DeleteOutline,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Remove")
             }
         }
     }
 }
 
 @Composable
-private fun SpecDivider() {
-    HorizontalDivider(
-        color = MaterialTheme.colorScheme.outlineVariant,
-        modifier = Modifier.padding(vertical = 10.dp)
-    )
-}
-
-@Composable
-private fun SpecRow(
+private fun KeySpecTile(
     icon: ImageVector,
     label: String,
     value: String,
-    mono: Boolean
+    modifier: Modifier = Modifier,
+    mono: Boolean = false
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = CircleShape,
+                modifier = Modifier.size(34.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = value,
+                    fontFamily = if (mono) JetBrainsMonoFontFamily else MaterialTheme.typography.titleSmall.fontFamily,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = value,
-            fontFamily = if (mono) JetBrainsMonoFontFamily else MaterialTheme.typography.bodyMedium.fontFamily,
-            fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }

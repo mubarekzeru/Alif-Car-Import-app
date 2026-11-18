@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -15,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -72,7 +74,14 @@ import com.example.auth.signOut
 import com.example.data.firebase.PortalRepository
 import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.firebase.VehicleRepository
+import com.example.ui.components.AddEditTikTokScreen
+import com.example.ui.components.AddEditVehicleScreen
+import com.example.ui.components.AdminAccessScreen
+import com.example.ui.components.BottomNavTab
+import com.example.ui.components.ContactSocialLocationScreen
 import com.example.ui.components.NotificationCenterTab
+import com.example.ui.components.NotificationsScreen
+import com.example.ui.components.QuickPriceEditScreen
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.VehicleDetailScreen
@@ -94,6 +103,14 @@ import kotlinx.coroutines.launch
 
 const val ROUTE_DASHBOARD = "dashboard"
 const val ROUTE_VEHICLE_DETAIL = "vehicle_detail/{vehicleId}"
+const val ROUTE_VEHICLE_FORM = "vehicle_form?vehicleId={vehicleId}"
+const val ROUTE_QUICK_PRICE = "quick_price/{vehicleId}"
+const val ROUTE_TIKTOK_FORM = "tiktok_form?postId={postId}"
+const val ROUTE_NOTIFICATIONS = "notifications"
+const val ROUTE_CONTACT_SOCIAL_LOCATION = "contact_social_location"
+const val ROUTE_ADMIN_ACCESS = "admin_access"
+
+private val LuxuryEaseOut = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
 private enum class AppRootStage {
     SPLASH,
@@ -109,8 +126,14 @@ class MainActivity : ComponentActivity() {
         SecurityNotificationHelper.ensureChannels(this)
         handleNotificationIntent(intent)
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            statusBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            ),
+            navigationBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            )
         )
         setContent {
             val requestedTab by pendingNotificationTab.collectAsStateWithLifecycle()
@@ -342,7 +365,18 @@ private fun AuthenticatedLotAdmin(
 
     LaunchedEffect(requestedNotificationTab) {
         if (requestedNotificationTab != null) {
-            portalViewModel.openNotifications(requestedNotificationTab)
+            when (requestedNotificationTab) {
+                NotificationCenterTab.INQUIRIES -> {
+                    portalViewModel.selectBottomNavTab(BottomNavTab.INQUIRIES)
+                    navController.popBackStack(ROUTE_DASHBOARD, inclusive = false)
+                }
+                NotificationCenterTab.LOGIN_ALERTS -> {
+                    portalViewModel.selectNotificationTab(NotificationCenterTab.LOGIN_ALERTS)
+                    navController.navigate(ROUTE_NOTIFICATIONS) {
+                        launchSingleTop = true
+                    }
+                }
+            }
             onConsumeNotificationTab()
         }
     }
@@ -355,33 +389,56 @@ private fun AuthenticatedLotAdmin(
     }
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isInventoryMutating by viewModel.isMutating.collectAsStateWithLifecycle()
+    val inventorySnackbar by viewModel.snackbarMessage.collectAsStateWithLifecycle()
+
+    val isPortalMutating by portalViewModel.isMutating.collectAsStateWithLifecycle()
+    val portalSnackbar by portalViewModel.snackbarMessage.collectAsStateWithLifecycle()
+    val showroomConfig by portalViewModel.showroomConfig.collectAsStateWithLifecycle()
+    val tikTokPosts by portalViewModel.tikTokPosts.collectAsStateWithLifecycle()
+    val inquiriesState by portalViewModel.inquiriesState.collectAsStateWithLifecycle()
+    val adminAccessState by portalViewModel.adminAccessState.collectAsStateWithLifecycle()
+    val loginAlerts by portalViewModel.loginAlerts.collectAsStateWithLifecycle()
+    val notificationTab by portalViewModel.notificationTab.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
         startDestination = ROUTE_DASHBOARD,
         enterTransition = {
             slideInHorizontally(
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
+                animationSpec = tween(340, easing = LuxuryEaseOut),
                 initialOffsetX = { fullWidth -> fullWidth / 4 }
-            ) + fadeIn(tween(220))
+            ) + scaleIn(
+                initialScale = 0.96f,
+                animationSpec = tween(340, easing = LuxuryEaseOut)
+            ) + fadeIn(tween(260, easing = LuxuryEaseOut))
         },
         exitTransition = {
             slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
+                animationSpec = tween(300, easing = LuxuryEaseOut),
                 targetOffsetX = { fullWidth -> -fullWidth / 6 }
-            ) + fadeOut(tween(180))
+            ) + scaleOut(
+                targetScale = 0.98f,
+                animationSpec = tween(300, easing = LuxuryEaseOut)
+            ) + fadeOut(tween(200))
         },
         popEnterTransition = {
             slideInHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
+                animationSpec = tween(320, easing = LuxuryEaseOut),
                 initialOffsetX = { fullWidth -> -fullWidth / 6 }
-            ) + fadeIn(tween(200))
+            ) + scaleIn(
+                initialScale = 0.98f,
+                animationSpec = tween(320, easing = LuxuryEaseOut)
+            ) + fadeIn(tween(240, easing = LuxuryEaseOut))
         },
         popExitTransition = {
             slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
+                animationSpec = tween(300, easing = LuxuryEaseOut),
                 targetOffsetX = { fullWidth -> fullWidth / 4 }
-            ) + fadeOut(tween(180))
+            ) + scaleOut(
+                targetScale = 0.96f,
+                animationSpec = tween(300, easing = LuxuryEaseOut)
+            ) + fadeOut(tween(200))
         }
     ) {
         composable(ROUTE_DASHBOARD) {
@@ -390,7 +447,31 @@ private fun AuthenticatedLotAdmin(
                 portalViewModel = portalViewModel,
                 userEmail = activeUser.email,
                 onOpenVehicleDetail = { vehicleId ->
-                    navController.navigate("vehicle_detail/$vehicleId")
+                    navController.navigate("vehicle_detail/$vehicleId") { launchSingleTop = true }
+                },
+                onOpenQuickPrice = { vehicleId ->
+                    navController.navigate("quick_price/$vehicleId") { launchSingleTop = true }
+                },
+                onOpenAddVehicle = {
+                    navController.navigate("vehicle_form") { launchSingleTop = true }
+                },
+                onOpenEditVehicle = { vehicleId ->
+                    navController.navigate("vehicle_form?vehicleId=$vehicleId") { launchSingleTop = true }
+                },
+                onOpenAddTikTok = {
+                    navController.navigate("tiktok_form") { launchSingleTop = true }
+                },
+                onOpenEditTikTok = { postId ->
+                    navController.navigate("tiktok_form?postId=$postId") { launchSingleTop = true }
+                },
+                onOpenNotifications = {
+                    navController.navigate(ROUTE_NOTIFICATIONS) { launchSingleTop = true }
+                },
+                onOpenContactSocialLocation = {
+                    navController.navigate(ROUTE_CONTACT_SOCIAL_LOCATION) { launchSingleTop = true }
+                },
+                onOpenAdminAccess = {
+                    navController.navigate(ROUTE_ADMIN_ACCESS) { launchSingleTop = true }
                 },
                 onSignOutClick = {
                     portalViewModel.prepareSignOut()
@@ -411,13 +492,143 @@ private fun AuthenticatedLotAdmin(
             VehicleDetailScreen(
                 vehicle = vehicle,
                 onBack = { navController.popBackStack() },
-                onQuickPriceClick = viewModel::openQuickPriceEdit,
+                onQuickPriceClick = { target ->
+                    navController.navigate("quick_price/${target.id}") { launchSingleTop = true }
+                },
                 onStatusChange = viewModel::updateStatus,
                 onToggleFeatured = viewModel::toggleFeatured,
-                onEditClick = viewModel::openEditVehicleSheet,
+                onEditClick = { target ->
+                    navController.navigate("vehicle_form?vehicleId=${target.id}") { launchSingleTop = true }
+                },
                 onDeleteClick = { target ->
                     viewModel.requestDeleteVehicle(target)
                     navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route = ROUTE_VEHICLE_FORM,
+            arguments = listOf(
+                navArgument("vehicleId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val vehicleId = backStackEntry.arguments?.getString("vehicleId")
+            val editingVehicle = vehicleId?.let { id ->
+                (uiState as? InventoryUiState.Success)?.allVehicles?.firstOrNull { it.id == id }
+            }
+
+            AddEditVehicleScreen(
+                editingVehicle = editingVehicle,
+                isSaving = isInventoryMutating,
+                snackbarMessage = inventorySnackbar,
+                onConsumeSnackbar = viewModel::consumeSnackbar,
+                onBack = { navController.popBackStack() },
+                onSubmit = { draft ->
+                    viewModel.submitVehicleForm(editingVehicle?.id, draft) {
+                        navController.popBackStack()
+                    }
+                }
+            )
+        }
+
+        composable(
+            route = ROUTE_QUICK_PRICE,
+            arguments = listOf(navArgument("vehicleId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val vehicleId = backStackEntry.arguments?.getString("vehicleId").orEmpty()
+            val targetVehicle = (uiState as? InventoryUiState.Success)
+                ?.allVehicles
+                ?.firstOrNull { it.id == vehicleId }
+
+            QuickPriceEditScreen(
+                vehicle = targetVehicle,
+                isSaving = isInventoryMutating,
+                snackbarMessage = inventorySnackbar,
+                onConsumeSnackbar = viewModel::consumeSnackbar,
+                onBack = { navController.popBackStack() },
+                onSavePrice = { vehicle, newPrice ->
+                    viewModel.saveQuickPrice(vehicle, newPrice) {
+                        navController.popBackStack()
+                    }
+                }
+            )
+        }
+
+        composable(
+            route = ROUTE_TIKTOK_FORM,
+            arguments = listOf(
+                navArgument("postId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val postId = backStackEntry.arguments?.getString("postId")
+            val editingPost = postId?.let { id ->
+                tikTokPosts.firstOrNull { it.id == id }
+            }
+
+            AddEditTikTokScreen(
+                editingPost = editingPost,
+                defaultSortOrder = tikTokPosts.size.toLong(),
+                isSaving = isPortalMutating,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onBack = { navController.popBackStack() },
+                onSave = { id, draft ->
+                    portalViewModel.saveTikTokPost(id, draft) {
+                        navController.popBackStack()
+                    }
+                }
+            )
+        }
+
+        composable(ROUTE_NOTIFICATIONS) {
+            NotificationsScreen(
+                activeTab = notificationTab,
+                alerts = loginAlerts,
+                inquiriesState = inquiriesState,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onSelectTab = portalViewModel::selectNotificationTab,
+                onConfirmItWasMe = portalViewModel::confirmLoginAlertIsMe,
+                onRejectNotMe = portalViewModel::rejectLoginAlertNotMe,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(ROUTE_CONTACT_SOCIAL_LOCATION) {
+            ContactSocialLocationScreen(
+                config = showroomConfig,
+                isSaving = isPortalMutating,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onBack = { navController.popBackStack() },
+                onSave = { updated ->
+                    portalViewModel.saveShowroomConfig(updated) {
+                        navController.popBackStack()
+                    }
+                }
+            )
+        }
+
+        composable(ROUTE_ADMIN_ACCESS) {
+            AdminAccessScreen(
+                state = adminAccessState,
+                isSaving = isPortalMutating,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onBack = { navController.popBackStack() },
+                onSaveEmails = { emails ->
+                    portalViewModel.saveAdminEmails(emails) {
+                        navController.popBackStack()
+                    }
                 }
             )
         }

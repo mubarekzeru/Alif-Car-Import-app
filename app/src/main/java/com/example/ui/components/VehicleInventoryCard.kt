@@ -28,7 +28,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,81 +93,132 @@ fun VehicleInventoryCard(
             .fillMaxWidth()
             .testTag("vehicle_card_${vehicle.id}"),
         onClick = onCardClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(if (isSelected) 1.5.dp else 1.dp, borderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = MaterialTheme.shapes.large
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            val context = LocalContext.current
+            val dataModel = remember(vehicle.id, vehicle.imageUrl) {
+                vehicle.resolveImageModel()
+            }
+            val imageRequest = remember(vehicle.id, dataModel) {
+                dataModel?.let {
+                    ImageRequest.Builder(context)
+                        .data(it)
+                        .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
+                        .size(640, 420)
+                        .crossfade(180)
+                        .allowHardware(true)
+                        .build()
+                }
+            }
+
+            // Rounded photo showcase matching Screenshot 1 card design
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Top
+                    .height(164.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
             ) {
-                val context = LocalContext.current
-                val dataModel = remember(vehicle.id, vehicle.imageUrl) {
-                    vehicle.resolveImageModel()
+                if (imageRequest != null) {
+                    AsyncImage(
+                        model = imageRequest,
+                        contentDescription = vehicle.displayTitle,
+                        modifier = Modifier.matchParentSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.DirectionsCar,
+                        contentDescription = vehicle.displayTitle,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(44.dp)
+                    )
                 }
-                val imageRequest = remember(vehicle.id, dataModel) {
-                    dataModel?.let {
-                        ImageRequest.Builder(context)
-                            .data(it)
-                            .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
-                            .size(336, 252)
-                            .crossfade(180)
-                            .allowHardware(true)
-                            .build()
-                    }
-                }
-                Box(
+
+                // Top-left overlaid status badge + featured chip
+                Row(
                     modifier = Modifier
-                        .size(width = 112.dp, height = 84.dp)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
+                        .align(Alignment.TopStart)
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (imageRequest != null) {
-                        AsyncImage(
-                            model = imageRequest,
-                            contentDescription = vehicle.displayTitle,
-                            modifier = Modifier.matchParentSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.DirectionsCar,
-                            contentDescription = vehicle.displayTitle,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(30.dp)
-                        )
-                    }
-                    if (vehicle.featured) {
+                    Box {
                         Surface(
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                            shape = CircleShape,
+                            shadowElevation = 2.dp,
                             modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(6.dp)
+                                .clip(CircleShape)
+                                .clickable { statusMenuExpanded = true }
+                                .testTag("status_pill_${vehicle.id}")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(statusFgColor)
+                                )
+                                Text(
+                                    text = status.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusFgColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = statusMenuExpanded,
+                            onDismissRequest = { statusMenuExpanded = false }
+                        ) {
+                            VehicleStatus.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text("Mark ${option.label}") },
+                                    onClick = {
+                                        statusMenuExpanded = false
+                                        onStatusChange(option)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (vehicle.featured) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                            shape = CircleShape
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Star,
                                     contentDescription = "Featured",
                                     tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(10.dp)
+                                    modifier = Modifier.size(11.dp)
                                 )
                                 Text(
-                                    text = "FEATURED",
+                                    text = "Featured",
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onPrimary
                                 )
                             }
@@ -176,235 +226,173 @@ fun VehicleInventoryCard(
                     }
                 }
 
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                // Top-right overlaid action button
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        shape = CircleShape,
+                        shadowElevation = 2.dp
                     ) {
-                        Box {
-                            Surface(
-                                color = statusBgColor,
-                                shape = CircleShape,
-                                border = BorderStroke(1.dp, statusFgColor.copy(alpha = 0.45f)),
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .clickable { statusMenuExpanded = true }
-                                    .testTag("status_pill_${vehicle.id}")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(7.dp)
-                                            .clip(CircleShape)
-                                            .background(statusFgColor)
-                                    )
-                                    Text(
-                                        text = status.label.uppercase(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = statusFgColor,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = statusMenuExpanded,
-                                onDismissRequest = { statusMenuExpanded = false }
-                            ) {
-                                VehicleStatus.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text("Mark ${option.label}") },
-                                        onClick = {
-                                            statusMenuExpanded = false
-                                            onStatusChange(option)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Box {
-                            IconButton(
-                                onClick = { actionMenuExpanded = true },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .testTag("vehicle_menu_${vehicle.id}")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.MoreVert,
-                                    contentDescription = "Vehicle actions",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = actionMenuExpanded,
-                                onDismissRequest = { actionMenuExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Quick Price Edit") },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Edit, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        actionMenuExpanded = false
-                                        onQuickPriceClick()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            if (vehicle.featured) "Remove Featured" else "Mark Featured"
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Star, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        actionMenuExpanded = false
-                                        onToggleFeatured()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Edit Full Details") },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Edit, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        actionMenuExpanded = false
-                                        onEditClick()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "Remove from Lot",
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.DeleteOutline,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    },
-                                    onClick = {
-                                        actionMenuExpanded = false
-                                        onDeleteClick()
-                                    }
-                                )
-                            }
+                        IconButton(
+                            onClick = { actionMenuExpanded = true },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("vehicle_menu_${vehicle.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Vehicle actions",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
-
-                    Text(
-                        text = vehicle.displayTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    val specLine = listOf(vehicle.transmission, vehicle.fuelType, vehicle.color)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" • ")
-                    if (specLine.isNotBlank()) {
-                        Text(
-                            text = specLine,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                    DropdownMenu(
+                        expanded = actionMenuExpanded,
+                        onDismissRequest = { actionMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Quick Price Edit") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                            },
+                            onClick = {
+                                actionMenuExpanded = false
+                                onQuickPriceClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (vehicle.featured) "Remove Featured" else "Mark Featured")
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Star, contentDescription = null)
+                            },
+                            onClick = {
+                                actionMenuExpanded = false
+                                onToggleFeatured()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Edit Full Details") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                            },
+                            onClick = {
+                                actionMenuExpanded = false
+                                onEditClick()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Remove from Lot",
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            onClick = {
+                                actionMenuExpanded = false
+                                onDeleteClick()
+                            }
                         )
                     }
+                }
+            }
 
-                    Spacer(modifier = Modifier.height(2.dp))
+            // Title + Price Row matching Screenshot 1
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = vehicle.displayTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = formatCurrency(vehicle.price),
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    val oldPrice = vehicle.originalPrice
+                    if (oldPrice != null && oldPrice > vehicle.price) {
+                        Text(
+                            text = formatCurrency(oldPrice),
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 11.sp,
+                            textDecoration = TextDecoration.LineThrough,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+            // Bottom metadata + Quick Price pill button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = formatMileageDisplay(vehicle.mileage),
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                    if (vehicle.origin.isNotBlank()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Speed,
+                                imageVector = Icons.Default.Public,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = formatMileageDisplay(vehicle.mileage),
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontSize = 11.sp,
+                                text = vehicle.origin,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                        if (vehicle.origin.isNotBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Public,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = vehicle.origin,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "ASKING PRICE",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = formatCurrency(vehicle.price),
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 19.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        val oldPrice = vehicle.originalPrice
-                        if (oldPrice != null && oldPrice > vehicle.price) {
-                            Text(
-                                text = formatCurrency(oldPrice),
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontSize = 12.sp,
-                                textDecoration = TextDecoration.LineThrough,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -412,28 +400,28 @@ fun VehicleInventoryCard(
 
                 Surface(
                     onClick = onQuickPriceClick,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = MaterialTheme.shapes.small,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = CircleShape,
                     modifier = Modifier
-                        .height(48.dp)
+                        .height(36.dp)
                         .testTag("edit_price_button_${vehicle.id}")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "Quick edit price",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp)
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(13.dp)
                         )
                         Text(
                             text = "Edit Price",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }

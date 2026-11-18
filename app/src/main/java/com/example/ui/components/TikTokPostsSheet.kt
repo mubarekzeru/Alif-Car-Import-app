@@ -4,24 +4,28 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,20 +36,23 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -57,15 +64,21 @@ import com.example.data.model.TikTokPostDraft
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddEditTikTokSheet(
+fun AddEditTikTokScreen(
     editingPost: TikTokPost?,
     defaultSortOrder: Long,
     isSaving: Boolean,
-    onDismiss: () -> Unit,
+    snackbarMessage: String?,
+    onConsumeSnackbar: () -> Unit,
+    onBack: () -> Unit,
     onSave: (editingPostId: String?, draft: TikTokPostDraft) -> Unit
 ) {
-    val sheetState = rememberNonDismissibleSheetState()
-    val scrollLockConnection = rememberSheetScrollLockConnection()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(snackbarMessage) {
+        val message = snackbarMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        onConsumeSnackbar()
+    }
 
     var titleInput by remember(editingPost?.id) { mutableStateOf(editingPost?.title ?: "") }
     var captionInput by remember(editingPost?.id) { mutableStateOf(editingPost?.caption ?: "") }
@@ -74,148 +87,150 @@ fun AddEditTikTokSheet(
         mutableStateOf((editingPost?.sortOrder ?: defaultSortOrder).toString())
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        dragHandle = null,
-        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .nestedScroll(scrollLockConnection)
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 20.dp)
-                .padding(top = 18.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "TIKTOK VIDEO FEED",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        enabled = !isSaving,
+                        modifier = Modifier.testTag("tiktok_form_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                title = {
                     Text(
                         text = if (editingPost == null) "Add TikTok Video Link" else "Edit TikTok Video",
-                        style = MaterialTheme.typography.headlineSmall
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-                IconButton(
-                    onClick = onDismiss,
-                    enabled = !isSaving,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close TikTok video form"
-                    )
-                }
-            }
-
-            OutlinedTextField(
-                value = titleInput,
-                onValueChange = { if (it.length <= 200) titleInput = it },
-                label = { Text("Video Title") },
-                placeholder = { Text("2024 Lexus RX 350 Walkaround") },
-                singleLine = true,
+            )
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("tiktok_title_input")
-            )
-            OutlinedTextField(
-                value = tiktokUrlInput,
-                onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
-                label = { Text("TikTok Video Link") },
-                placeholder = { Text("https://www.tiktok.com/@…/video/…") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("tiktok_url_input")
-            )
-            OutlinedTextField(
-                value = captionInput,
-                onValueChange = { if (it.length <= 2000) captionInput = it },
-                label = { Text("Caption") },
-                minLines = 2,
-                maxLines = 4,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("tiktok_caption_input")
-            )
-            OutlinedTextField(
-                value = sortOrderInput,
-                onValueChange = { next ->
-                    val digits = next.filter(Char::isDigit)
-                    if (digits.length <= 4) sortOrderInput = digits
-                },
-                label = { Text("Display Order (0–1000)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    .widthIn(max = 680.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    enabled = !isSaving,
+                OutlinedTextField(
+                    value = titleInput,
+                    onValueChange = { if (it.length <= 200) titleInput = it },
+                    label = { Text("Video Title") },
+                    placeholder = { Text("2024 Lexus RX 350 Walkaround") },
+                    singleLine = true,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(50.dp)
-                ) {
-                    Text("Cancel")
-                }
-                Button(
-                    onClick = {
-                        val order = (sortOrderInput.toLongOrNull() ?: 0L).coerceIn(0L, 1000L)
-                        onSave(
-                            editingPost?.id,
-                            TikTokPostDraft(
-                                title = titleInput,
-                                caption = captionInput,
-                                tiktokUrl = tiktokUrlInput,
-                                coverImageUrl = "",
-                                sortOrder = order
-                            )
-                        )
+                        .fillMaxWidth()
+                        .testTag("tiktok_title_input")
+                )
+                OutlinedTextField(
+                    value = tiktokUrlInput,
+                    onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
+                    label = { Text("TikTok Video Link") },
+                    placeholder = { Text("https://www.tiktok.com/@…/video/…") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tiktok_url_input")
+                )
+                OutlinedTextField(
+                    value = captionInput,
+                    onValueChange = { if (it.length <= 2000) captionInput = it },
+                    label = { Text("Caption") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tiktok_caption_input")
+                )
+                OutlinedTextField(
+                    value = sortOrderInput,
+                    onValueChange = { next ->
+                        val digits = next.filter(Char::isDigit)
+                        if (digits.length <= 4) sortOrderInput = digits
                     },
-                    enabled = !isSaving,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier
-                        .weight(1.4f)
-                        .height(50.dp)
-                        .testTag("save_tiktok_post_button")
+                    label = { Text("Display Order (0–1000)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    if (isSaving) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Saving…")
-                    } else {
-                        Text(
-                            text = if (editingPost == null) "Publish Video Link" else "Save Changes",
-                            fontWeight = FontWeight.Bold
-                        )
+                    OutlinedButton(
+                        onClick = onBack,
+                        enabled = !isSaving,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                    ) {
+                        Text("Cancel")
+                    }
+                    Button(
+                        onClick = {
+                            val order = (sortOrderInput.toLongOrNull() ?: 0L).coerceIn(0L, 1000L)
+                            onSave(
+                                editingPost?.id,
+                                TikTokPostDraft(
+                                    title = titleInput,
+                                    caption = captionInput,
+                                    tiktokUrl = tiktokUrlInput,
+                                    coverImageUrl = "",
+                                    sortOrder = order
+                                )
+                            )
+                        },
+                        enabled = !isSaving,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .weight(1.4f)
+                            .height(50.dp)
+                            .testTag("save_tiktok_post_button")
+                    ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Saving…")
+                        } else {
+                            Text(
+                                text = if (editingPost == null) "Publish Video Link" else "Save Changes",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
@@ -348,7 +363,7 @@ fun TikTokPostCard(
                     modifier = Modifier.height(44.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.OpenInNew,
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )

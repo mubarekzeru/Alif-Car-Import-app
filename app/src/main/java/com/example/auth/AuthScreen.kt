@@ -1,5 +1,6 @@
 package com.example.auth
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -109,6 +110,18 @@ fun AuthScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
     var cardVisible by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = activeMode == AuthScreenMode.VERIFY_EMAIL && !isSigningIn) {
+        errorMessage = null
+        infoMessage = null
+        signOut(
+            credentialManager = credentialManager,
+            scope = scope,
+            onSignOutComplete = {
+                activeMode = AuthScreenMode.SIGN_IN
+            }
+        )
+    }
 
     LaunchedEffect(Unit) {
         cardVisible = true

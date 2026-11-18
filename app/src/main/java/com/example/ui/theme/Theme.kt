@@ -3,21 +3,22 @@ package com.example.ui.theme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-private val CarbonAmberColorScheme = darkColorScheme(
+private val AlifEditorialLightColorScheme = lightColorScheme(
     primary = SignalAmber,
     onPrimary = OnAmber,
     primaryContainer = DeepAmberContainer,
     onPrimaryContainer = OnAmberContainer,
     secondary = WarmAmberGlow,
-    onSecondary = OnAmber,
+    onSecondary = Color.White,
     secondaryContainer = ElevatedSlate,
     onSecondaryContainer = IvoryText,
     tertiary = EmeraldAvailable,
-    onTertiary = OnAmber,
+    onTertiary = Color.White,
     tertiaryContainer = EmeraldContainer,
     onTertiaryContainer = EmeraldAvailable,
     background = CarbonBackground,
@@ -26,24 +27,24 @@ private val CarbonAmberColorScheme = darkColorScheme(
     onSurface = IvoryText,
     surfaceVariant = ElevatedSlate,
     onSurfaceVariant = MutedSteel,
-    surfaceContainerLowest = CarbonBackground,
-    surfaceContainerLow = GraphiteSurface,
-    surfaceContainer = ElevatedSlate,
+    surfaceContainerLowest = GraphiteSurface,
+    surfaceContainerLow = Color(0xFFFAF9F7),
+    surfaceContainer = GraphiteSurface,
     surfaceContainerHigh = HighestSlate,
     outline = HairlineOutline,
     outlineVariant = SubtleOutline,
     error = CrimsonError,
-    onError = IvoryText,
+    onError = Color.White,
     errorContainer = CrimsonContainer,
     onErrorContainer = CrimsonError
 )
 
 private val LotPulseShapes = Shapes(
-    extraSmall = RoundedCornerShape(6.dp),
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(14.dp),
-    large = RoundedCornerShape(18.dp),
-    extraLarge = RoundedCornerShape(24.dp)
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(22.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
 @Composable
@@ -51,7 +52,7 @@ fun LotPulseTheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = CarbonAmberColorScheme,
+        colorScheme = AlifEditorialLightColorScheme,
         typography = LotPulseTypography,
         shapes = LotPulseShapes,
         content = content

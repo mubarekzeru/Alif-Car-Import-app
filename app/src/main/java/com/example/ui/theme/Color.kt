@@ -2,32 +2,34 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark Carbon Surfaces
-val CarbonBackground = Color(0xFF0E1013)
-val GraphiteSurface = Color(0xFF171A1F)
-val ElevatedSlate = Color(0xFF1F242C)
-val HighestSlate = Color(0xFF282E38)
-val HairlineOutline = Color(0xFF2D333D)
-val SubtleOutline = Color(0xFF222730)
+// Light Luxury Pearl & Crisp White Surfaces
+val CarbonBackground = Color(0xFFF6F5F3)
+val GraphiteSurface = Color(0xFFFFFFFF)
+val ElevatedSlate = Color(0xFFF2F0EC)
+val HighestSlate = Color(0xFFE9E6E0)
+val HairlineOutline = Color(0xFFE5E2DC)
+val SubtleOutline = Color(0xFFEEECE7)
 
-// Signal Amber Accents
-val SignalAmber = Color(0xFFF59E0B)
-val WarmAmberGlow = Color(0xFFFBBF24)
-val DeepAmberContainer = Color(0xFF3A2606)
-val OnAmber = Color(0xFF141008)
-val OnAmberContainer = Color(0xFFFDE68A)
+// Obsidian Ink & Warm Coral-Orange Accents
+val SignalAmber = Color(0xFF1A1B1E)
+val WarmAmberGlow = Color(0xFFE85A2B)
+val WarmCoralTop = Color(0xFFE95A2C)
+val WarmPeachWash = Color(0xFFFCE6DD)
+val DeepAmberContainer = Color(0xFFFFEDE6)
+val OnAmber = Color(0xFFFFFFFF)
+val OnAmberContainer = Color(0xFFD94B20)
 
 // Text Neutrals
-val IvoryText = Color(0xFFF4F6F8)
-val MutedSteel = Color(0xFF9CA3AF)
-val DimSteel = Color(0xFF6B7280)
+val IvoryText = Color(0xFF16171A)
+val MutedSteel = Color(0xFF6B7078)
+val DimSteel = Color(0xFF9CA3AF)
 
 // Semantic Status Accents
-val EmeraldAvailable = Color(0xFF22C55E)
-val EmeraldContainer = Color(0xFF0D2E1A)
-val AmberReserved = Color(0xFFF59E0B)
-val AmberReservedContainer = Color(0xFF332207)
-val SlateSold = Color(0xFF94A3B8)
-val SlateSoldContainer = Color(0xFF1E242D)
-val CrimsonError = Color(0xFFEF4444)
-val CrimsonContainer = Color(0xFF3B1214)
+val EmeraldAvailable = Color(0xFF16A34A)
+val EmeraldContainer = Color(0xFFDCFCE7)
+val AmberReserved = Color(0xFFD97706)
+val AmberReservedContainer = Color(0xFFFEF3C7)
+val SlateSold = Color(0xFF475569)
+val SlateSoldContainer = Color(0xFFE2E8F0)
+val CrimsonError = Color(0xFFDC2626)
+val CrimsonContainer = Color(0xFFFEE2E2)

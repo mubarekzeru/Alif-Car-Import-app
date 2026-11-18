@@ -2,11 +2,13 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -16,10 +18,13 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,14 +32,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -55,7 +60,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -65,8 +69,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -74,14 +76,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +93,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -109,36 +110,43 @@ import com.example.R
 import com.example.data.firebase.InquiriesState
 import com.example.data.model.TikTokPost
 import com.example.data.model.Vehicle
-import com.example.ui.components.AddEditTikTokSheet
-import com.example.ui.components.AddEditVehicleSheet
-import com.example.ui.components.AdminAccessSheet
+import com.example.data.model.VehicleStatus
+import com.example.ui.components.BottomNavTab
+import com.example.ui.components.CustomerInquiriesTabContent
+import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.LotMetricsStrip
-import com.example.ui.components.NotificationsSheet
-import com.example.ui.components.QuickPriceEditSheet
-import com.example.ui.components.SettingsSheet
-import com.example.ui.components.ShowroomConfigSheet
+import com.example.ui.components.SettingsTabContent
 import com.example.ui.components.TikTokPostCard
 import com.example.ui.components.VehicleInventoryCard
 import com.example.ui.components.decodeImageModel
 import com.example.ui.notifications.SecurityNotificationHelper
-import com.example.ui.viewmodel.ActivePortalSheet
+import com.example.ui.theme.WarmCoralTop
+import com.example.ui.theme.WarmPeachWash
 import com.example.ui.viewmodel.DashboardSection
-import com.example.ui.viewmodel.FormSheetMode
+import com.example.ui.viewmodel.FilterState
 import com.example.ui.viewmodel.InventoryUiState
 import com.example.ui.viewmodel.InventoryViewModel
 import com.example.ui.viewmodel.LotMetrics
 import com.example.ui.viewmodel.PortalViewModel
 import com.example.ui.viewmodel.StatusFilter
-import com.example.ui.viewmodel.TikTokFormMode
 import com.example.ui.viewmodel.VehicleSortOrder
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val TabSlideEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
 @Composable
 fun DashboardScreen(
     viewModel: InventoryViewModel,
     portalViewModel: PortalViewModel,
     userEmail: String?,
     onOpenVehicleDetail: (String) -> Unit,
+    onOpenQuickPrice: (String) -> Unit,
+    onOpenAddVehicle: () -> Unit,
+    onOpenEditVehicle: (String) -> Unit,
+    onOpenAddTikTok: () -> Unit,
+    onOpenEditTikTok: (String) -> Unit,
+    onOpenNotifications: () -> Unit,
+    onOpenContactSocialLocation: () -> Unit,
+    onOpenAdminAccess: () -> Unit,
     onSignOutClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -146,14 +154,10 @@ fun DashboardScreen(
     val isMutating by viewModel.isMutating.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val selectedVehicleId by viewModel.selectedVehicleId.collectAsStateWithLifecycle()
-    val priceEditVehicle by viewModel.priceEditVehicle.collectAsStateWithLifecycle()
-    val formSheetState by viewModel.formSheetState.collectAsStateWithLifecycle()
     val deleteCandidate by viewModel.deleteCandidate.collectAsStateWithLifecycle()
 
+    val selectedBottomTab by portalViewModel.bottomNavTab.collectAsStateWithLifecycle()
     val dashboardSection by portalViewModel.dashboardSection.collectAsStateWithLifecycle()
-    val activePortalSheet by portalViewModel.activeSheet.collectAsStateWithLifecycle()
-    val notificationTab by portalViewModel.notificationTab.collectAsStateWithLifecycle()
-    val tikTokFormMode by portalViewModel.tikTokFormMode.collectAsStateWithLifecycle()
     val deleteTikTokCandidate by portalViewModel.deleteTikTokCandidate.collectAsStateWithLifecycle()
     val isPortalMutating by portalViewModel.isMutating.collectAsStateWithLifecycle()
     val isChangingPassword by portalViewModel.isChangingPassword.collectAsStateWithLifecycle()
@@ -161,17 +165,32 @@ fun DashboardScreen(
     val showroomConfig by portalViewModel.showroomConfig.collectAsStateWithLifecycle()
     val tikTokPosts by portalViewModel.tikTokPosts.collectAsStateWithLifecycle()
     val inquiriesState by portalViewModel.inquiriesState.collectAsStateWithLifecycle()
-    val adminAccessState by portalViewModel.adminAccessState.collectAsStateWithLifecycle()
-    val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
     val loginAlerts by portalViewModel.loginAlerts.collectAsStateWithLifecycle()
+    val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
     val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var sortMenuExpanded by remember { mutableStateOf(false) }
-    var accountMenuExpanded by remember { mutableStateOf(false) }
     var sectionMenuExpanded by remember { mutableStateOf(false) }
     var addMenuExpanded by remember { mutableStateOf(false) }
+
+    // Ordered from lowest priority to highest priority (last enabled BackHandler wins)
+    BackHandler(
+        enabled = selectedBottomTab == BottomNavTab.HOME &&
+            dashboardSection == DashboardSection.TIKTOK_VIDEOS
+    ) {
+        portalViewModel.selectDashboardSection(DashboardSection.INVENTORY)
+    }
+    BackHandler(enabled = selectedBottomTab != BottomNavTab.HOME) {
+        portalViewModel.selectBottomNavTab(BottomNavTab.HOME)
+    }
+    BackHandler(enabled = sectionMenuExpanded) {
+        sectionMenuExpanded = false
+    }
+    BackHandler(enabled = addMenuExpanded) {
+        addMenuExpanded = false
+    }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -187,18 +206,18 @@ fun DashboardScreen(
 
     val pendingAlertsCount = portalViewModel.pendingAlertsCount(loginAlerts)
     val inquiryCount = (inquiriesState as? InquiriesState.Success)?.inquiries?.size ?: 0
-    val totalNotificationBadge = pendingAlertsCount + inquiryCount
-
     val vehicleCount = (uiState as? InventoryUiState.Success)?.allVehicles?.size ?: 0
 
     val brandDisplayName = showroomConfig.branding.companyName
         .trim()
         .ifBlank { stringResource(R.string.app_name) }
     val brandLogoUrl = showroomConfig.branding.logoUrl.trim()
-    val brandLogoRequest = remember(brandLogoUrl) {
-        val model: Any = decodeImageModel(brandLogoUrl) ?: R.drawable.img_alif_logo
+    val brandLogoModel: Any = remember(brandLogoUrl) {
+        decodeImageModel(brandLogoUrl) ?: R.drawable.img_alif_logo
+    }
+    val brandLogoRequest = remember(brandLogoModel) {
         ImageRequest.Builder(context)
-            .data(model)
+            .data(brandLogoModel)
             .crossfade(160)
             .build()
     }
@@ -215,671 +234,140 @@ fun DashboardScreen(
         portalViewModel.consumeSnackbar()
     }
 
-    val switcherArrowRotation by animateFloatAsState(
-        targetValue = if (sectionMenuExpanded) 180f else 0f,
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "section_arrow_rotation"
-    )
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing,
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                ),
-                title = {
-                    Row(
-                        modifier = Modifier
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable { sectionMenuExpanded = !sectionMenuExpanded }
-                            .padding(horizontal = 4.dp, vertical = 8.dp)
-                            .testTag("section_switcher_button"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        AnimatedContent(
-                            targetState = dashboardSection,
-                            transitionSpec = {
-                                fadeIn(tween(200)) togetherWith fadeOut(tween(150))
-                            },
-                            label = "header_section_label"
-                        ) { section ->
-                            Text(
-                                text = section.label,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Switch dashboard view",
-                            modifier = Modifier
-                                .size(18.dp)
-                                .rotate(switcherArrowRotation)
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = { viewModel.toggleSearchExpanded(!filterState.isSearchExpanded) },
-                        modifier = Modifier.testTag("toggle_search_button")
-                    ) {
-                        Icon(
-                            imageVector = if (filterState.isSearchExpanded) Icons.Default.Close else Icons.Default.Search,
-                            contentDescription = if (dashboardSection == DashboardSection.INVENTORY) {
-                                "Search vehicles"
-                            } else {
-                                "Search TikTok videos"
-                            }
-                        )
-                    }
-
-                    if (dashboardSection == DashboardSection.INVENTORY) {
-                        Box {
-                            IconButton(
-                                onClick = { sortMenuExpanded = true },
-                                modifier = Modifier.testTag("sort_menu_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Sort,
-                                    contentDescription = "Sort vehicles"
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = sortMenuExpanded,
-                                onDismissRequest = { sortMenuExpanded = false }
-                            ) {
-                                VehicleSortOrder.entries.forEach { order ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = order.label,
-                                                fontWeight = if (filterState.sortOrder == order) {
-                                                    FontWeight.Bold
-                                                } else {
-                                                    FontWeight.Normal
-                                                },
-                                                color = if (filterState.sortOrder == order) {
-                                                    MaterialTheme.colorScheme.primary
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurface
-                                                }
-                                            )
-                                        },
-                                        onClick = {
-                                            sortMenuExpanded = false
-                                            viewModel.updateSortOrder(order)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    IconButton(
-                        onClick = { portalViewModel.openNotifications() },
-                        modifier = Modifier.testTag("notifications_button")
-                    ) {
-                        BadgedBox(
-                            badge = {
-                                if (totalNotificationBadge > 0) {
-                                    Badge(
-                                        containerColor = if (pendingAlertsCount > 0) {
-                                            MaterialTheme.colorScheme.error
-                                        } else {
-                                            MaterialTheme.colorScheme.primary
-                                        }
-                                    ) {
-                                        Text(
-                                            text = if (totalNotificationBadge > 99) "99+" else totalNotificationBadge.toString()
-                                        )
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                imageVector = if (pendingAlertsCount > 0) {
-                                    Icons.Default.NotificationsActive
-                                } else {
-                                    Icons.Default.Notifications
-                                },
-                                contentDescription = "Notifications"
-                            )
-                        }
-                    }
-
-                    Box {
-                        IconButton(
-                            onClick = { accountMenuExpanded = true },
-                            modifier = Modifier.testTag("account_menu_button")
-                        ) {
-                            Surface(
-                                color = Color.White,
-                                shape = CircleShape,
-                                border = BorderStroke(
-                                    width = 1.5.dp,
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
-                                ),
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                AsyncImage(
-                                    model = brandLogoRequest,
-                                    contentDescription = "$brandDisplayName profile menu",
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(2.dp)
-                                        .clip(CircleShape),
-                                    contentScale = ContentScale.Crop
-                                )
-                            }
-                        }
-                        DropdownMenu(
-                            expanded = accountMenuExpanded,
-                            onDismissRequest = { accountMenuExpanded = false }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Surface(
-                                    color = Color.White,
-                                    shape = CircleShape,
-                                    border = BorderStroke(
-                                        width = 1.dp,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                                    ),
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = brandLogoRequest,
-                                        contentDescription = brandDisplayName,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(2.dp)
-                                            .clip(CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = brandDisplayName,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "ADMIN PORTAL",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    if (!userEmail.isNullOrBlank()) {
-                                        Text(
-                                            text = userEmail,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("Settings") },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Settings, contentDescription = null)
-                                },
-                                onClick = {
-                                    accountMenuExpanded = false
-                                    portalViewModel.openSheet(ActivePortalSheet.SETTINGS)
-                                },
-                                modifier = Modifier.testTag("open_settings_menu_item")
-                            )
-                        }
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                AnimatedVisibility(
-                    visible = addMenuExpanded,
-                    enter = expandVertically(
-                        expandFrom = Alignment.Bottom,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    ) + fadeIn(tween(180)),
-                    exit = shrinkVertically(
-                        shrinkTowards = Alignment.Bottom,
-                        animationSpec = spring(stiffness = Spring.StiffnessMedium)
-                    ) + fadeOut(tween(130))
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            onClick = {
-                                addMenuExpanded = false
-                                portalViewModel.openAddTikTokForm()
-                            },
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("add_tiktok_option")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VideoLibrary,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Text(
-                                    text = "Add TikTok Video Link",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-
-                        Surface(
-                            onClick = {
-                                addMenuExpanded = false
-                                viewModel.openAddVehicleSheet()
-                            },
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("add_vehicle_option")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DirectionsCar,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Text(
-                                    text = "Add Vehicle",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-                }
-
-                ExtendedFloatingActionButton(
-                    onClick = { addMenuExpanded = !addMenuExpanded },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("add_menu_fab"),
-                    icon = {
-                        Icon(
-                            imageVector = if (addMenuExpanded) Icons.Default.Close else Icons.Default.Add,
-                            contentDescription = null
-                        )
-                    },
-                    text = {
-                        Text(
-                            text = if (addMenuExpanded) "Close" else "Add",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                )
-            }
-        }
-    ) { innerPadding ->
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            val isExpandedSplit = maxWidth >= 840.dp
-            val isMediumGrid = maxWidth in 600.dp..839.dp
-
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Sliding down section switcher under "Inventory v"
-                AnimatedVisibility(
-                    visible = sectionMenuExpanded,
-                    enter = expandVertically(
-                        expandFrom = Alignment.Top,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    ) + fadeIn(tween(180)),
-                    exit = shrinkVertically(
-                        shrinkTowards = Alignment.Top,
-                        animationSpec = spring(stiffness = Spring.StiffnessMedium)
-                    ) + fadeOut(tween(140))
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        shape = MaterialTheme.shapes.large,
-                        shadowElevation = 6.dp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp)
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            SectionSwitchOptionRow(
-                                icon = Icons.Default.DirectionsCar,
-                                label = "Inventory",
-                                count = vehicleCount,
-                                isSelected = dashboardSection == DashboardSection.INVENTORY,
-                                onClick = {
-                                    sectionMenuExpanded = false
-                                    portalViewModel.selectDashboardSection(DashboardSection.INVENTORY)
-                                },
-                                testTag = "switch_to_inventory_option"
-                            )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            SectionSwitchOptionRow(
-                                icon = Icons.Default.VideoLibrary,
-                                label = "TikTok Videos",
-                                count = tikTokPosts.size,
-                                isSelected = dashboardSection == DashboardSection.TIKTOK_VIDEOS,
-                                onClick = {
-                                    sectionMenuExpanded = false
-                                    portalViewModel.selectDashboardSection(DashboardSection.TIKTOK_VIDEOS)
-                                },
-                                testTag = "switch_to_tiktok_option"
-                            )
-                        }
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = filterState.isSearchExpanded,
-                    enter = expandVertically(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    ) + fadeIn(tween(180)),
-                    exit = shrinkVertically(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        )
-                    ) + fadeOut(tween(140))
-                ) {
-                    OutlinedTextField(
-                        value = filterState.searchQuery,
-                        onValueChange = viewModel::updateSearchQuery,
-                        placeholder = {
-                            Text(
-                                if (dashboardSection == DashboardSection.INVENTORY) {
-                                    stringResource(R.string.action_search_vehicles)
-                                } else {
-                                    "Search TikTok video title, caption, or link"
-                                }
-                            )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        AnimatedContent(
+            targetState = selectedBottomTab,
+            transitionSpec = {
+                val movingForward = targetState.ordinal > initialState.ordinal
+                val enterSlide = slideInHorizontally(
+                    animationSpec = tween(300, easing = TabSlideEasing),
+                    initialOffsetX = { width -> if (movingForward) width / 5 else -width / 5 }
+                ) + fadeIn(tween(240, easing = TabSlideEasing))
+                val exitSlide = slideOutHorizontally(
+                    animationSpec = tween(260, easing = TabSlideEasing),
+                    targetOffsetX = { width -> if (movingForward) -width / 6 else width / 6 }
+                ) + fadeOut(tween(180))
+                enterSlide togetherWith exitSlide
+            },
+            label = "bottom_nav_tab_transition",
+            modifier = Modifier.fillMaxSize()
+        ) { activeTab ->
+            when (activeTab) {
+                BottomNavTab.HOME -> {
+                    HomeDashboardTab(
+                        uiState = uiState,
+                        filterState = filterState,
+                        selectedVehicleId = selectedVehicleId,
+                        dashboardSection = dashboardSection,
+                        sectionMenuExpanded = sectionMenuExpanded,
+                        sortMenuExpanded = sortMenuExpanded,
+                        vehicleCount = vehicleCount,
+                        tikTokPosts = tikTokPosts,
+                        tikTokHandle = showroomConfig.tiktok.handle,
+                        pendingAlertsCount = pendingAlertsCount,
+                        brandDisplayName = brandDisplayName,
+                        brandLogoRequest = brandLogoRequest,
+                        onToggleSectionMenu = { sectionMenuExpanded = !sectionMenuExpanded },
+                        onDismissSectionMenu = { sectionMenuExpanded = false },
+                        onSelectDashboardSection = { section ->
+                            sectionMenuExpanded = false
+                            portalViewModel.selectDashboardSection(section)
                         },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null)
+                        onSearchQueryChange = viewModel::updateSearchQuery,
+                        onToggleSortMenu = { sortMenuExpanded = it },
+                        onSelectSortOrder = { order ->
+                            sortMenuExpanded = false
+                            viewModel.updateSortOrder(order)
                         },
-                        trailingIcon = {
-                            if (filterState.searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.updateSearchQuery("") }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear search")
-                                }
-                            }
+                        onSelectStatusFilter = viewModel::selectStatusFilter,
+                        onOpenNotifications = onOpenNotifications,
+                        onOpenSettingsTab = {
+                            portalViewModel.selectBottomNavTab(BottomNavTab.SETTINGS)
                         },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp)
-                            .testTag("search_vehicles_input")
+                        onSelectVehicleSplit = viewModel::selectVehicle,
+                        onOpenVehicleDetail = onOpenVehicleDetail,
+                        onOpenQuickPrice = onOpenQuickPrice,
+                        onStatusChange = viewModel::updateStatus,
+                        onToggleFeatured = viewModel::toggleFeatured,
+                        onOpenEditVehicle = onOpenEditVehicle,
+                        onDeleteVehicle = viewModel::requestDeleteVehicle,
+                        onOpenAddVehicle = onOpenAddVehicle,
+                        onOpenEditTikTok = onOpenEditTikTok,
+                        onDeleteTikTok = portalViewModel::requestDeleteTikTokPost,
+                        onOpenAddTikTok = onOpenAddTikTok
                     )
                 }
 
-                AnimatedContent(
-                    targetState = dashboardSection,
-                    transitionSpec = {
-                        (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
-                            expandVertically(tween(220))) togetherWith fadeOut(tween(150))
-                    },
-                    label = "dashboard_section_content"
-                ) { activeSection ->
-                    when (activeSection) {
-                        DashboardSection.TIKTOK_VIDEOS -> {
-                            val query = filterState.searchQuery.trim().lowercase()
-                            val filteredPosts = remember(tikTokPosts, query) {
-                                if (query.isEmpty()) {
-                                    tikTokPosts
-                                } else {
-                                    tikTokPosts.filter {
-                                        it.title.lowercase().contains(query) ||
-                                            it.caption.lowercase().contains(query) ||
-                                            it.tiktokUrl.lowercase().contains(query)
-                                    }
-                                }
-                            }
-                            TikTokVideosDashboardContent(
-                                posts = filteredPosts,
-                                handle = showroomConfig.tiktok.handle,
-                                isGrid = isMediumGrid || isExpandedSplit,
-                                onEditClick = portalViewModel::openEditTikTokForm,
-                                onDeleteClick = portalViewModel::requestDeleteTikTokPost,
-                                onAddTikTokClick = portalViewModel::openAddTikTokForm
-                            )
-                        }
+                BottomNavTab.INQUIRIES -> {
+                    CustomerInquiriesTabContent(state = inquiriesState)
+                }
 
-                        DashboardSection.INVENTORY -> {
-                            AnimatedContent(
-                                targetState = uiState,
-                                contentKey = { state ->
-                                    when (state) {
-                                        InventoryUiState.Loading -> "loading"
-                                        is InventoryUiState.Error -> "error"
-                                        is InventoryUiState.Success -> "success"
-                                    }
-                                },
-                                transitionSpec = {
-                                    fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
-                                        fadeOut(tween(160))
-                                },
-                                label = "inventory_state_transition"
-                            ) { state ->
-                                when (state) {
-                                    InventoryUiState.Loading -> {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                            ) {
-                                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                                                Text(
-                                                    text = "Syncing cloud lot inventory…",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    is InventoryUiState.Error -> {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .padding(24.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                                            ) {
-                                                Text(
-                                                    text = stringResource(R.string.error_load_inventory),
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
-                                                Text(
-                                                    text = state.message,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    textAlign = TextAlign.Center
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    is InventoryUiState.Success -> {
-                                        Column(modifier = Modifier.fillMaxSize()) {
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            LotMetricsStrip(metrics = state.metrics)
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            StatusFilterRow(
-                                                selected = filterState.selectedStatus,
-                                                metrics = state.metrics,
-                                                onSelect = viewModel::selectStatusFilter
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-
-                                            if (isExpandedSplit) {
-                                                val selectedVehicle = state.filteredVehicles.firstOrNull {
-                                                    it.id == selectedVehicleId
-                                                } ?: state.filteredVehicles.firstOrNull()
-
-                                                Row(modifier = Modifier.fillMaxSize()) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .weight(1.1f)
-                                                            .fillMaxHeight()
-                                                    ) {
-                                                        InventoryFeedContent(
-                                                            vehicles = state.filteredVehicles,
-                                                            selectedVehicleId = selectedVehicle?.id,
-                                                            isGrid = false,
-                                                            onCardClick = { viewModel.selectVehicle(it.id) },
-                                                            onQuickPriceClick = viewModel::openQuickPriceEdit,
-                                                            onStatusChange = viewModel::updateStatus,
-                                                            onToggleFeatured = viewModel::toggleFeatured,
-                                                            onEditClick = viewModel::openEditVehicleSheet,
-                                                            onDeleteClick = viewModel::requestDeleteVehicle,
-                                                            onAddVehicleClick = viewModel::openAddVehicleSheet
-                                                        )
-                                                    }
-
-                                                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .weight(0.9f)
-                                                            .fillMaxHeight()
-                                                    ) {
-                                                        if (selectedVehicle != null) {
-                                                            VehicleDetailPane(
-                                                                vehicle = selectedVehicle,
-                                                                onQuickPriceClick = {
-                                                                    viewModel.openQuickPriceEdit(selectedVehicle)
-                                                                },
-                                                                onStatusChange = { status ->
-                                                                    viewModel.updateStatus(selectedVehicle, status)
-                                                                },
-                                                                onToggleFeatured = {
-                                                                    viewModel.toggleFeatured(selectedVehicle)
-                                                                },
-                                                                onEditClick = {
-                                                                    viewModel.openEditVehicleSheet(selectedVehicle)
-                                                                },
-                                                                onDeleteClick = {
-                                                                    viewModel.requestDeleteVehicle(selectedVehicle)
-                                                                }
-                                                            )
-                                                        } else {
-                                                            EmptyLotState(onAddClick = viewModel::openAddVehicleSheet)
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                InventoryFeedContent(
-                                                    vehicles = state.filteredVehicles,
-                                                    selectedVehicleId = null,
-                                                    isGrid = isMediumGrid,
-                                                    onCardClick = { onOpenVehicleDetail(it.id) },
-                                                    onQuickPriceClick = viewModel::openQuickPriceEdit,
-                                                    onStatusChange = viewModel::updateStatus,
-                                                    onToggleFeatured = viewModel::toggleFeatured,
-                                                    onEditClick = viewModel::openEditVehicleSheet,
-                                                    onDeleteClick = viewModel::requestDeleteVehicle,
-                                                    onAddVehicleClick = viewModel::openAddVehicleSheet
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                BottomNavTab.SETTINGS -> {
+                    SettingsTabContent(
+                        userEmail = userEmail,
+                        brandDisplayName = brandDisplayName,
+                        brandLogoModel = brandLogoRequest,
+                        sessions = sessions,
+                        loginAtMillis = currentLoginAtMillis,
+                        isMutatingPassword = isChangingPassword,
+                        onDeactivateDevice = portalViewModel::deactivateOtherDevice,
+                        onChangePassword = portalViewModel::changePassword,
+                        onOpenContactSocialLocation = onOpenContactSocialLocation,
+                        onOpenAdminAccess = onOpenAdminAccess,
+                        onSignOutClick = onSignOutClick
+                    )
                 }
             }
         }
-    }
 
-    priceEditVehicle?.let { vehicle ->
-        QuickPriceEditSheet(
-            vehicle = vehicle,
-            isSaving = isMutating,
-            onDismiss = viewModel::dismissQuickPriceEdit,
-            onSavePrice = { newPrice -> viewModel.saveQuickPrice(vehicle, newPrice) }
+        // Click-outside scrim when "+ Add" menu is expanded
+        AnimatedVisibility(
+            visible = addMenuExpanded,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(150))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.24f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { addMenuExpanded = false }
+            )
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 84.dp)
         )
-    }
 
-    formSheetState?.let { mode ->
-        val editing = (mode as? FormSheetMode.Edit)?.vehicle
-        AddEditVehicleSheet(
-            editingVehicle = editing,
-            isSaving = isMutating,
-            onDismiss = viewModel::dismissFormSheet,
-            onSubmit = { draft -> viewModel.submitVehicleForm(editing?.id, draft) }
-        )
-    }
-
-    tikTokFormMode?.let { mode ->
-        val editing = (mode as? TikTokFormMode.Edit)?.post
-        AddEditTikTokSheet(
-            editingPost = editing,
-            defaultSortOrder = tikTokPosts.size.toLong(),
-            isSaving = isPortalMutating,
-            onDismiss = portalViewModel::dismissTikTokForm,
-            onSave = { postId, draft -> portalViewModel.saveTikTokPost(postId, draft) }
+        FloatingBottomNavBar(
+            selectedTab = selectedBottomTab,
+            isAddExpanded = addMenuExpanded,
+            inquiriesBadgeCount = inquiryCount,
+            onSelectTab = { tab ->
+                addMenuExpanded = false
+                portalViewModel.selectBottomNavTab(tab)
+            },
+            onToggleAddMenu = { addMenuExpanded = !addMenuExpanded },
+            onAddVehicleClick = {
+                addMenuExpanded = false
+                onOpenAddVehicle()
+            },
+            onAddTikTokClick = {
+                addMenuExpanded = false
+                onOpenAddTikTok()
+            },
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 
@@ -949,56 +437,593 @@ fun DashboardScreen(
             }
         )
     }
+}
 
-    when (activePortalSheet) {
-        ActivePortalSheet.NONE -> Unit
-        ActivePortalSheet.SETTINGS -> {
-            SettingsSheet(
-                userEmail = userEmail,
-                sessions = sessions,
-                loginAtMillis = currentLoginAtMillis,
-                isMutatingPassword = isChangingPassword,
-                onDeactivateDevice = portalViewModel::deactivateOtherDevice,
-                onChangePassword = portalViewModel::changePassword,
-                onOpenShowroomConfig = {
-                    portalViewModel.openSheet(ActivePortalSheet.SHOWROOM)
+@Composable
+private fun HomeDashboardTab(
+    uiState: InventoryUiState,
+    filterState: FilterState,
+    selectedVehicleId: String?,
+    dashboardSection: DashboardSection,
+    sectionMenuExpanded: Boolean,
+    sortMenuExpanded: Boolean,
+    vehicleCount: Int,
+    tikTokPosts: List<TikTokPost>,
+    tikTokHandle: String,
+    pendingAlertsCount: Int,
+    brandDisplayName: String,
+    brandLogoRequest: ImageRequest,
+    onToggleSectionMenu: () -> Unit,
+    onDismissSectionMenu: () -> Unit,
+    onSelectDashboardSection: (DashboardSection) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onToggleSortMenu: (Boolean) -> Unit,
+    onSelectSortOrder: (VehicleSortOrder) -> Unit,
+    onSelectStatusFilter: (StatusFilter) -> Unit,
+    onOpenNotifications: () -> Unit,
+    onOpenSettingsTab: () -> Unit,
+    onSelectVehicleSplit: (String) -> Unit,
+    onOpenVehicleDetail: (String) -> Unit,
+    onOpenQuickPrice: (String) -> Unit,
+    onStatusChange: (Vehicle, VehicleStatus) -> Unit,
+    onToggleFeatured: (Vehicle) -> Unit,
+    onOpenEditVehicle: (String) -> Unit,
+    onDeleteVehicle: (Vehicle) -> Unit,
+    onOpenAddVehicle: () -> Unit,
+    onOpenEditTikTok: (String) -> Unit,
+    onDeleteTikTok: (TikTokPost) -> Unit,
+    onOpenAddTikTok: () -> Unit
+) {
+    val switcherArrowRotation by animateFloatAsState(
+        targetValue = if (sectionMenuExpanded) 180f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "section_arrow_rotation"
+    )
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isExpandedSplit = maxWidth >= 840.dp
+        val isMediumGrid = maxWidth in 600.dp..839.dp
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Warm Coral-Orange Header Wash matching Screen 1
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                WarmCoralTop,
+                                WarmPeachWash,
+                                MaterialTheme.colorScheme.background
+                            )
+                        )
+                    )
+                    .statusBarsPadding()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Top Row: Section Switcher Pill (Left) + Bell & Profile Logo (Right)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = Color.White.copy(alpha = 0.22f),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.38f)),
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable(onClick = onToggleSectionMenu)
+                                .testTag("section_switcher_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                AnimatedContent(
+                                    targetState = dashboardSection,
+                                    transitionSpec = {
+                                        fadeIn(tween(200)) togetherWith fadeOut(tween(150))
+                                    },
+                                    label = "header_section_label"
+                                ) { section ->
+                                    Text(
+                                        text = section.label,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Switch dashboard view",
+                                    tint = Color.White,
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .rotate(switcherArrowRotation)
+                                )
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = Color.White,
+                                shape = CircleShape,
+                                shadowElevation = 3.dp
+                            ) {
+                                IconButton(
+                                    onClick = onOpenNotifications,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .testTag("notifications_button")
+                                ) {
+                                    BadgedBox(
+                                        badge = {
+                                            if (pendingAlertsCount > 0) {
+                                                Badge(
+                                                    containerColor = MaterialTheme.colorScheme.error,
+                                                    contentColor = Color.White
+                                                ) {
+                                                    Text(
+                                                        text = if (pendingAlertsCount > 99) "99+" else pendingAlertsCount.toString()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (pendingAlertsCount > 0) {
+                                                Icons.Default.NotificationsActive
+                                            } else {
+                                                Icons.Default.Notifications
+                                            },
+                                            contentDescription = "Login alerts",
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(21.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                onClick = onOpenSettingsTab,
+                                color = Color.White,
+                                shape = CircleShape,
+                                border = BorderStroke(1.5.dp, Color.White),
+                                shadowElevation = 3.dp,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .testTag("account_menu_button")
+                            ) {
+                                AsyncImage(
+                                    model = brandLogoRequest,
+                                    contentDescription = "$brandDisplayName settings",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(3.dp)
+                                        .clip(CircleShape),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        }
+                    }
+
+                    // Sliding down section switcher under "Inventory v"
+                    AnimatedVisibility(
+                        visible = sectionMenuExpanded,
+                        enter = expandVertically(
+                            expandFrom = Alignment.Top,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        ) + fadeIn(tween(180)),
+                        exit = shrinkVertically(
+                            shrinkTowards = Alignment.Top,
+                            animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                        ) + fadeOut(tween(140))
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            shape = MaterialTheme.shapes.large,
+                            shadowElevation = 6.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SectionSwitchOptionRow(
+                                    icon = Icons.Default.DirectionsCar,
+                                    label = "Inventory",
+                                    count = vehicleCount,
+                                    isSelected = dashboardSection == DashboardSection.INVENTORY,
+                                    onClick = { onSelectDashboardSection(DashboardSection.INVENTORY) },
+                                    testTag = "switch_to_inventory_option"
+                                )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                SectionSwitchOptionRow(
+                                    icon = Icons.Default.VideoLibrary,
+                                    label = "TikTok Videos",
+                                    count = tikTokPosts.size,
+                                    isSelected = dashboardSection == DashboardSection.TIKTOK_VIDEOS,
+                                    onClick = { onSelectDashboardSection(DashboardSection.TIKTOK_VIDEOS) },
+                                    testTag = "switch_to_tiktok_option"
+                                )
+                            }
+                        }
+                    }
+
+                    // Header Metrics inside the warm gradient wash
+                    if (dashboardSection == DashboardSection.INVENTORY && uiState is InventoryUiState.Success) {
+                        LotMetricsStrip(metrics = uiState.metrics)
+                    } else if (dashboardSection == DashboardSection.TIKTOK_VIDEOS) {
+                        TikTokHeaderSummaryCard(
+                            postCount = tikTokPosts.size,
+                            handle = tikTokHandle
+                        )
+                    }
+                }
+            }
+
+            // Capsule Search Pill + Sort button matching Screen 1
+            OutlinedTextField(
+                value = filterState.searchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = {
+                    Text(
+                        text = if (dashboardSection == DashboardSection.INVENTORY) {
+                            stringResource(R.string.action_search_vehicles)
+                        } else {
+                            "Search TikTok video title, caption, or link"
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 },
-                onOpenAdminAccess = {
-                    portalViewModel.openSheet(ActivePortalSheet.ADMIN_ACCESS)
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 },
-                onSignOutClick = {
-                    portalViewModel.dismissSheet()
-                    onSignOutClick()
+                trailingIcon = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.padding(end = 6.dp)
+                    ) {
+                        if (filterState.searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onSearchQueryChange("") },
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        if (dashboardSection == DashboardSection.INVENTORY) {
+                            Box {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = { onToggleSortMenu(true) },
+                                        modifier = Modifier.testTag("sort_menu_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Sort,
+                                            contentDescription = "Sort vehicles",
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                DropdownMenu(
+                                    expanded = sortMenuExpanded,
+                                    onDismissRequest = { onToggleSortMenu(false) }
+                                ) {
+                                    VehicleSortOrder.entries.forEach { order ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = order.label,
+                                                    fontWeight = if (filterState.sortOrder == order) {
+                                                        FontWeight.Bold
+                                                    } else {
+                                                        FontWeight.Normal
+                                                    },
+                                                    color = if (filterState.sortOrder == order) {
+                                                        MaterialTheme.colorScheme.secondary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    }
+                                                )
+                                            },
+                                            onClick = { onSelectSortOrder(order) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 },
-                onDismiss = portalViewModel::dismissSheet
+                singleLine = true,
+                shape = CircleShape,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .testTag("search_vehicles_input")
             )
+
+            AnimatedContent(
+                targetState = dashboardSection,
+                transitionSpec = {
+                    (fadeIn(tween(240, easing = TabSlideEasing)) +
+                        expandVertically(tween(240))) togetherWith fadeOut(tween(150))
+                },
+                label = "dashboard_section_content",
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(
+                        enabled = sectionMenuExpanded,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onDismissSectionMenu() }
+            ) { activeSection ->
+                when (activeSection) {
+                    DashboardSection.TIKTOK_VIDEOS -> {
+                        val query = filterState.searchQuery.trim().lowercase()
+                        val filteredPosts = remember(tikTokPosts, query) {
+                            if (query.isEmpty()) {
+                                tikTokPosts
+                            } else {
+                                tikTokPosts.filter {
+                                    it.title.lowercase().contains(query) ||
+                                        it.caption.lowercase().contains(query) ||
+                                        it.tiktokUrl.lowercase().contains(query)
+                                }
+                            }
+                        }
+                        TikTokVideosDashboardContent(
+                            posts = filteredPosts,
+                            isGrid = isMediumGrid || isExpandedSplit,
+                            onEditClick = { post -> onOpenEditTikTok(post.id) },
+                            onDeleteClick = onDeleteTikTok,
+                            onAddTikTokClick = onOpenAddTikTok
+                        )
+                    }
+
+                    DashboardSection.INVENTORY -> {
+                        AnimatedContent(
+                            targetState = uiState,
+                            contentKey = { state ->
+                                when (state) {
+                                    InventoryUiState.Loading -> "loading"
+                                    is InventoryUiState.Error -> "error"
+                                    is InventoryUiState.Success -> "success"
+                                }
+                            },
+                            transitionSpec = {
+                                fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
+                                    fadeOut(tween(160))
+                            },
+                            label = "inventory_state_transition"
+                        ) { state ->
+                            when (state) {
+                                InventoryUiState.Loading -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(bottom = 108.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                            Text(
+                                                text = "Syncing cloud lot inventory…",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+
+                                is InventoryUiState.Error -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(24.dp)
+                                            .padding(bottom = 108.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Text(
+                                                text = stringResource(R.string.error_load_inventory),
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                            Text(
+                                                text = state.message,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+
+                                is InventoryUiState.Success -> {
+                                    Column(modifier = Modifier.fillMaxSize()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        StatusFilterRow(
+                                            selected = filterState.selectedStatus,
+                                            metrics = state.metrics,
+                                            onSelect = onSelectStatusFilter
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        if (isExpandedSplit) {
+                                            val selectedVehicle = state.filteredVehicles.firstOrNull {
+                                                it.id == selectedVehicleId
+                                            } ?: state.filteredVehicles.firstOrNull()
+
+                                            Row(modifier = Modifier.fillMaxSize()) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .weight(1.1f)
+                                                        .fillMaxHeight()
+                                                ) {
+                                                    InventoryFeedContent(
+                                                        vehicles = state.filteredVehicles,
+                                                        selectedVehicleId = selectedVehicle?.id,
+                                                        isGrid = false,
+                                                        onCardClick = { onSelectVehicleSplit(it.id) },
+                                                        onQuickPriceClick = { onOpenQuickPrice(it.id) },
+                                                        onStatusChange = onStatusChange,
+                                                        onToggleFeatured = onToggleFeatured,
+                                                        onEditClick = { onOpenEditVehicle(it.id) },
+                                                        onDeleteClick = onDeleteVehicle,
+                                                        onAddVehicleClick = onOpenAddVehicle
+                                                    )
+                                                }
+
+                                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                                                Box(
+                                                    modifier = Modifier
+                                                        .weight(0.9f)
+                                                        .fillMaxHeight()
+                                                ) {
+                                                    if (selectedVehicle != null) {
+                                                        VehicleDetailPane(
+                                                            vehicle = selectedVehicle,
+                                                            onQuickPriceClick = {
+                                                                onOpenQuickPrice(selectedVehicle.id)
+                                                            },
+                                                            onStatusChange = { status ->
+                                                                onStatusChange(selectedVehicle, status)
+                                                            },
+                                                            onToggleFeatured = {
+                                                                onToggleFeatured(selectedVehicle)
+                                                            },
+                                                            onEditClick = {
+                                                                onOpenEditVehicle(selectedVehicle.id)
+                                                            },
+                                                            onDeleteClick = {
+                                                                onDeleteVehicle(selectedVehicle)
+                                                            }
+                                                        )
+                                                    } else {
+                                                        EmptyLotState(onAddClick = onOpenAddVehicle)
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            InventoryFeedContent(
+                                                vehicles = state.filteredVehicles,
+                                                selectedVehicleId = null,
+                                                isGrid = isMediumGrid,
+                                                onCardClick = { onOpenVehicleDetail(it.id) },
+                                                onQuickPriceClick = { onOpenQuickPrice(it.id) },
+                                                onStatusChange = onStatusChange,
+                                                onToggleFeatured = onToggleFeatured,
+                                                onEditClick = { onOpenEditVehicle(it.id) },
+                                                onDeleteClick = onDeleteVehicle,
+                                                onAddVehicleClick = onOpenAddVehicle
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-        ActivePortalSheet.NOTIFICATIONS -> {
-            NotificationsSheet(
-                activeTab = notificationTab,
-                alerts = loginAlerts,
-                inquiriesState = inquiriesState,
-                onSelectTab = portalViewModel::selectNotificationTab,
-                onConfirmItWasMe = portalViewModel::confirmLoginAlertIsMe,
-                onRejectNotMe = portalViewModel::rejectLoginAlertNotMe,
-                onDismiss = portalViewModel::dismissSheet
-            )
-        }
-        ActivePortalSheet.SHOWROOM -> {
-            ShowroomConfigSheet(
-                config = showroomConfig,
-                isSaving = isPortalMutating,
-                onDismiss = { portalViewModel.openSheet(ActivePortalSheet.SETTINGS) },
-                onSave = portalViewModel::saveShowroomConfig
-            )
-        }
-        ActivePortalSheet.ADMIN_ACCESS -> {
-            AdminAccessSheet(
-                state = adminAccessState,
-                isSaving = isPortalMutating,
-                onDismiss = { portalViewModel.openSheet(ActivePortalSheet.SETTINGS) },
-                onSaveEmails = portalViewModel::saveAdminEmails
-            )
+    }
+}
+
+@Composable
+private fun TikTokHeaderSummaryCard(
+    postCount: Int,
+    handle: String
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = MaterialTheme.shapes.large,
+        shadowElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "TIKTOK VIDEO SHOWCASE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                Text(
+                    text = "$postCount Published Video Links",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            if (handle.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = CircleShape
+                ) {
+                    Text(
+                        text = handle,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -1024,13 +1049,13 @@ private fun SectionSwitchOptionRow(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            tint = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = label,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
         Surface(
@@ -1041,7 +1066,7 @@ private fun SectionSwitchOptionRow(
                 text = count.toString(),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
             )
         }
@@ -1049,7 +1074,7 @@ private fun SectionSwitchOptionRow(
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.primary,
+                tint = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.size(18.dp)
             )
         }
@@ -1059,138 +1084,93 @@ private fun SectionSwitchOptionRow(
 @Composable
 private fun TikTokVideosDashboardContent(
     posts: List<TikTokPost>,
-    handle: String,
     isGrid: Boolean,
     onEditClick: (TikTokPost) -> Unit,
     onDeleteClick: (TikTokPost) -> Unit,
     onAddTikTokClick: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            shape = MaterialTheme.shapes.large,
+    if (posts.isEmpty()) {
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .fillMaxSize()
+                .padding(24.dp)
+                .padding(bottom = 108.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "TIKTOK VIDEO SHOWCASE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "${posts.size} Published Video Links",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                if (handle.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = CircleShape
-                    ) {
-                        Text(
-                            text = handle,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(34.dp)
                         )
                     }
                 }
+                Text(
+                    text = "No TikTok videos yet",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Tap + below to publish a TikTok video link directly to your website showcase.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Button(
+                    onClick = onAddTikTokClick,
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Add TikTok Video Link", fontWeight = FontWeight.Bold)
+                }
             }
         }
-
-        if (posts.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = CircleShape,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier.size(72.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.VideoLibrary,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(34.dp)
-                            )
-                        }
-                    }
-                    Text(
-                        text = "No TikTok videos yet",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "Tap Add TikTok Video Link to publish a video URL directly to your website showcase.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    Button(
-                        onClick = onAddTikTokClick,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        modifier = Modifier.height(48.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Add TikTok Video Link", fontWeight = FontWeight.Bold)
-                    }
-                }
+    } else if (isGrid) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(items = posts, key = { it.id }) { post ->
+                TikTokPostCard(
+                    post = post,
+                    onEditClick = { onEditClick(post) },
+                    onDeleteClick = { onDeleteClick(post) }
+                )
             }
-        } else if (isGrid) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(items = posts, key = { it.id }) { post ->
-                    TikTokPostCard(
-                        post = post,
-                        onEditClick = { onEditClick(post) },
-                        onDeleteClick = { onDeleteClick(post) }
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(items = posts, key = { it.id }) { post ->
-                    TikTokPostCard(
-                        post = post,
-                        onEditClick = { onEditClick(post) },
-                        onDeleteClick = { onDeleteClick(post) }
-                    )
-                }
+        }
+    } else {
+        LazyColumn(
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(items = posts, key = { it.id }) { post ->
+                TikTokPostCard(
+                    post = post,
+                    onEditClick = { onEditClick(post) },
+                    onDeleteClick = { onDeleteClick(post) }
+                )
             }
         }
     }
@@ -1216,27 +1196,24 @@ private fun StatusFilterRow(
             }
             val isSelected = selected == filter
             val containerColor by animateColorAsState(
-                targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                animationSpec = tween(180),
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                animationSpec = tween(200),
                 label = "chip_container"
             )
             val labelColor by animateColorAsState(
-                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                animationSpec = tween(180),
+                targetValue = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                animationSpec = tween(200),
                 label = "chip_label"
             )
             val borderColor by animateColorAsState(
-                targetValue = if (isSelected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                } else {
-                    MaterialTheme.colorScheme.outline
-                },
-                animationSpec = tween(180),
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                animationSpec = tween(200),
                 label = "chip_border"
             )
             FilterChip(
                 selected = isSelected,
                 onClick = { onSelect(filter) },
+                shape = CircleShape,
                 label = {
                     Text(
                         text = "${filter.label} ($count)",
@@ -1265,7 +1242,7 @@ private fun InventoryFeedContent(
     isGrid: Boolean,
     onCardClick: (Vehicle) -> Unit,
     onQuickPriceClick: (Vehicle) -> Unit,
-    onStatusChange: (Vehicle, com.example.data.model.VehicleStatus) -> Unit,
+    onStatusChange: (Vehicle, VehicleStatus) -> Unit,
     onToggleFeatured: (Vehicle) -> Unit,
     onEditClick: (Vehicle) -> Unit,
     onDeleteClick: (Vehicle) -> Unit,
@@ -1283,7 +1260,7 @@ private fun InventoryFeedContent(
         LazyVerticalGrid(
             state = gridState,
             columns = GridCells.Fixed(2),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
@@ -1313,7 +1290,7 @@ private fun InventoryFeedContent(
     } else {
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 108.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
@@ -1347,7 +1324,8 @@ private fun EmptyLotState(onAddClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(24.dp)
+            .padding(bottom = 108.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -1355,7 +1333,7 @@ private fun EmptyLotState(onAddClick: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer,
+                color = MaterialTheme.colorScheme.surface,
                 shape = CircleShape,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 modifier = Modifier.size(72.dp)
@@ -1364,7 +1342,7 @@ private fun EmptyLotState(onAddClick: () -> Unit) {
                     Icon(
                         imageVector = Icons.Default.DirectionsCar,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.secondary,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -1384,6 +1362,7 @@ private fun EmptyLotState(onAddClick: () -> Unit) {
             Spacer(modifier = Modifier.height(4.dp))
             Button(
                 onClick = onAddClick,
+                shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary

@@ -50,11 +50,11 @@ fun LotMetricsStrip(
     ) {
         item {
             MetricCard(
-                label = "ACTIVE LOT VALUE",
+                label = "ACTIVE LOT",
                 value = formatCompactCurrency(metrics.activeInventoryValue),
                 sublabel = "${metrics.availableCount + metrics.reservedCount} active units",
                 icon = Icons.Default.AttachMoney,
-                accentColor = MaterialTheme.colorScheme.primary,
+                accentColor = MaterialTheme.colorScheme.secondary,
                 isFeatured = true
             )
         }
@@ -78,7 +78,7 @@ fun LotMetricsStrip(
         }
         item {
             MetricCard(
-                label = "SOLD UNITS",
+                label = "SOLD",
                 value = metrics.soldCount.toString(),
                 sublabel = formatCompactCurrency(metrics.totalLotValue - metrics.activeInventoryValue),
                 icon = Icons.Default.DirectionsCar,
@@ -97,29 +97,19 @@ private fun MetricCard(
     accentColor: Color,
     isFeatured: Boolean = false
 ) {
-    val borderColor = if (isFeatured) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
-    } else {
-        MaterialTheme.colorScheme.outline
-    }
-    val containerColor = if (isFeatured) {
-        MaterialTheme.colorScheme.surfaceContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-
     Card(
-        modifier = Modifier.widthIn(min = 148.dp, max = 196.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        border = BorderStroke(1.dp, borderColor),
-        shape = MaterialTheme.shapes.medium
+        modifier = Modifier.widthIn(min = 142.dp, max = 188.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = MaterialTheme.shapes.large,
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
@@ -140,8 +130,8 @@ private fun MetricCard(
                 text = value,
                 fontFamily = JetBrainsMonoFontFamily,
                 fontWeight = FontWeight.Bold,
-                fontSize = 21.sp,
-                color = if (isFeatured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                fontSize = 20.sp,
+                color = if (isFeatured) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

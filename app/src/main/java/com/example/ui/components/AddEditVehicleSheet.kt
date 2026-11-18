@@ -8,23 +8,25 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
@@ -38,14 +40,17 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.model.Vehicle
@@ -73,18 +79,25 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddEditVehicleSheet(
+fun AddEditVehicleScreen(
     editingVehicle: Vehicle?,
     isSaving: Boolean,
-    onDismiss: () -> Unit,
+    snackbarMessage: String?,
+    onConsumeSnackbar: () -> Unit,
+    onBack: () -> Unit,
     onSubmit: (VehicleDraft) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val sheetState = rememberNonDismissibleSheetState()
-    val scrollLockConnection = rememberSheetScrollLockConnection()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(snackbarMessage) {
+        val message = snackbarMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        onConsumeSnackbar()
+    }
+
     var isProcessingPhoto by remember { mutableStateOf(false) }
 
     var yearInput by remember(editingVehicle?.id) {
@@ -207,527 +220,523 @@ fun AddEditVehicleSheet(
     }
     val hasPickedDataUrl = imageUrlInput.startsWith("data:image", ignoreCase = true)
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        dragHandle = null,
-        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .nestedScroll(scrollLockConnection)
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 20.dp)
-                .padding(top = 18.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = if (editingVehicle == null) "QUICK VEHICLE INTAKE" else "EDIT VEHICLE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        enabled = !isSaving,
+                        modifier = Modifier.testTag("close_vehicle_sheet_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                title = {
                     Text(
                         text = if (editingVehicle == null) {
                             "Publish Vehicle to Portal"
                         } else {
                             editingVehicle.displayTitle
                         },
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(
-                    onClick = onDismiss,
-                    enabled = !isSaving,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("close_vehicle_sheet_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close vehicle form"
-                    )
-                }
-            }
-
-            // Photo Picker + Preview
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+            )
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 680.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 120.dp, height = 88.dp)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (previewModel != null) {
-                        AsyncImage(
-                            model = previewModel,
-                            contentDescription = "Vehicle photo preview",
-                            modifier = Modifier.matchParentSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.DirectionsCar,
-                            contentDescription = "No vehicle photo selected",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                    if (imageUrlInput.isNotBlank()) {
-                        IconButton(
-                            onClick = { imageUrlInput = "" },
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Clear image",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("pick_vehicle_photo_button"),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (hasPickedDataUrl) "Change Photo" else "Pick Photo")
-                    }
-                    Text(
-                        text = if (hasPickedDataUrl) {
-                            "Photo compressed for web & mobile sync."
-                        } else {
-                            "Pick a photo from your device or paste an image URL."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            if (!hasPickedDataUrl) {
-                OutlinedTextField(
-                    value = imageUrlInput,
-                    onValueChange = { if (it.length <= 550_000) imageUrlInput = it },
-                    label = { Text("Image URL") },
-                    placeholder = { Text("https://…") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("vehicle_photo_url_input")
-                )
-            }
-
-            // Additional Gallery Photos (up to 10)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Photo Picker + Preview
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Gallery Photos (${galleryImagesInput.size}/10)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (galleryImagesInput.size < 10) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 120.dp, height = 88.dp)
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (previewModel != null) {
+                            AsyncImage(
+                                model = previewModel,
+                                contentDescription = "Vehicle photo preview",
+                                modifier = Modifier.matchParentSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.DirectionsCar,
+                                contentDescription = "No vehicle photo selected",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+                        if (imageUrlInput.isNotBlank()) {
+                            IconButton(
+                                onClick = { imageUrlInput = "" },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear image",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         OutlinedButton(
                             onClick = {
-                                galleryPickerLauncher.launch(
+                                photoPickerLauncher.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
                             },
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             modifier = Modifier
-                                .height(40.dp)
-                                .testTag("add_gallery_photos_button")
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("pick_vehicle_photo_button"),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Add Photos", style = MaterialTheme.typography.labelMedium)
+                            Icon(
+                                imageVector = Icons.Default.AddPhotoAlternate,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (hasPickedDataUrl) "Change Photo" else "Pick Photo")
                         }
+                        Text(
+                            text = if (hasPickedDataUrl) {
+                                "Photo compressed for web & mobile sync."
+                            } else {
+                                "Pick a photo from your device or paste an image URL."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
-                if (galleryImagesInput.isNotEmpty()) {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        itemsIndexed(galleryImagesInput) { index, img ->
-                            Box(
-                                modifier = Modifier
-                                    .size(width = 84.dp, height = 64.dp)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                AsyncImage(
-                                    model = decodeImageModel(img),
-                                    contentDescription = "Gallery photo ${index + 1}",
-                                    modifier = Modifier.matchParentSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                                IconButton(
-                                    onClick = {
-                                        galleryImagesInput = galleryImagesInput.filterIndexed { i, _ -> i != index }
-                                    },
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove gallery photo ${index + 1}",
-                                        tint = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.size(16.dp)
+
+                if (!hasPickedDataUrl) {
+                    OutlinedTextField(
+                        value = imageUrlInput,
+                        onValueChange = { if (it.length <= 550_000) imageUrlInput = it },
+                        label = { Text("Image URL") },
+                        placeholder = { Text("https://…") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("vehicle_photo_url_input")
+                    )
+                }
+
+                // Additional Gallery Photos (up to 10)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Gallery Photos (${galleryImagesInput.size}/10)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (galleryImagesInput.size < 10) {
+                            OutlinedButton(
+                                onClick = {
+                                    galleryPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
+                                },
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("add_gallery_photos_button")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add Photos", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                    if (galleryImagesInput.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(galleryImagesInput) { index, img ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(width = 84.dp, height = 64.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    AsyncImage(
+                                        model = decodeImageModel(img),
+                                        contentDescription = "Gallery photo ${index + 1}",
+                                        modifier = Modifier.matchParentSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            galleryImagesInput = galleryImagesInput.filterIndexed { i, _ -> i != index }
+                                        },
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Remove gallery photo ${index + 1}",
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // Year + Make
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+                // Year + Make
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = yearInput,
+                        onValueChange = { if (it.length <= 4) yearInput = it.filter(Char::isDigit) },
+                        label = { Text("Year") },
+                        isError = attemptedSubmit && !yearValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .weight(0.35f)
+                            .testTag("vehicle_year_input")
+                    )
+                    OutlinedTextField(
+                        value = makeInput,
+                        onValueChange = { if (it.length <= 80) makeInput = it },
+                        label = { Text("Make") },
+                        placeholder = { Text("Lexus") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(0.65f)
+                            .testTag("vehicle_make_input")
+                    )
+                }
+
+                // Model + Display Title
                 OutlinedTextField(
-                    value = yearInput,
-                    onValueChange = { if (it.length <= 4) yearInput = it.filter(Char::isDigit) },
-                    label = { Text("Year") },
-                    isError = attemptedSubmit && !yearValid,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier
-                        .weight(0.35f)
-                        .testTag("vehicle_year_input")
-                )
-                OutlinedTextField(
-                    value = makeInput,
-                    onValueChange = { if (it.length <= 80) makeInput = it },
-                    label = { Text("Make") },
-                    placeholder = { Text("Lexus") },
+                    value = modelInput,
+                    onValueChange = { if (it.length <= 120) modelInput = it },
+                    label = { Text("Model") },
+                    placeholder = { Text("RX 350") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                     modifier = Modifier
-                        .weight(0.65f)
-                        .testTag("vehicle_make_input")
+                        .fillMaxWidth()
+                        .testTag("vehicle_model_input")
                 )
-            }
 
-            // Model + Display Title
-            OutlinedTextField(
-                value = modelInput,
-                onValueChange = { if (it.length <= 120) modelInput = it },
-                label = { Text("Model") },
-                placeholder = { Text("RX 350") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("vehicle_model_input")
-            )
-
-            OutlinedTextField(
-                value = titleInput,
-                onValueChange = { if (it.length <= 200) titleInput = it },
-                label = { Text("Listing Title") },
-                placeholder = { Text("2024 Lexus RX 350 F Sport") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("vehicle_title_input")
-            )
-
-            // Price + Original Price
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
                 OutlinedTextField(
-                    value = priceInput,
-                    onValueChange = { next ->
-                        val digits = next.filter(Char::isDigit)
-                        if (digits.length <= 9) priceInput = digits
-                    },
-                    label = { Text("Price") },
-                    prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
-                    isError = attemptedSubmit && !priceValid,
+                    value = titleInput,
+                    onValueChange = { if (it.length <= 200) titleInput = it },
+                    label = { Text("Listing Title") },
+                    placeholder = { Text("2024 Lexus RX 350 F Sport") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                     modifier = Modifier
-                        .weight(1f)
-                        .testTag("vehicle_price_input")
+                        .fillMaxWidth()
+                        .testTag("vehicle_title_input")
                 )
-                OutlinedTextField(
-                    value = originalPriceInput,
-                    onValueChange = { next ->
-                        val digits = next.filter(Char::isDigit)
-                        if (digits.length <= 9) originalPriceInput = digits
-                    },
-                    label = { Text("Original Price") },
-                    prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
-                    isError = attemptedSubmit && !originalPriceValid,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("vehicle_original_price_input")
-                )
-            }
 
-            // Mileage + Origin
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = mileageInput,
-                    onValueChange = { if (it.length <= 60) mileageInput = it },
-                    label = { Text("Mileage") },
-                    placeholder = { Text("12,400 km") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("vehicle_mileage_input")
-                )
-                OutlinedTextField(
-                    value = originInput,
-                    onValueChange = { if (it.length <= 100) originInput = it },
-                    label = { Text("Origin") },
-                    placeholder = { Text("Dubai / Japan") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardCapitalization.Words.let {
-                        KeyboardOptions(capitalization = it)
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("vehicle_origin_input")
-                )
-            }
-
-            // Transmission + Fuel Type + Color
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = transmissionInput,
-                    onValueChange = { if (it.length <= 80) transmissionInput = it },
-                    label = { Text("Transmission") },
-                    placeholder = { Text("Automatic") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                OutlinedTextField(
-                    value = fuelTypeInput,
-                    onValueChange = { if (it.length <= 80) fuelTypeInput = it },
-                    label = { Text("Fuel Type") },
-                    placeholder = { Text("Petrol") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            OutlinedTextField(
-                value = colorInput,
-                onValueChange = { if (it.length <= 80) colorInput = it },
-                label = { Text("Exterior Color") },
-                placeholder = { Text("Pearl White") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            // Status Selector
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Lot Status",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // Price + Original Price
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    VehicleStatus.entries.forEach { status ->
-                        val colors = status.colors()
-                        FilterChip(
-                            selected = selectedStatus == status,
-                            onClick = { selectedStatus = status },
-                            label = { Text(status.label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = colors.background,
-                                selectedLabelColor = colors.foreground
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                        )
-                    }
-                }
-            }
-
-            // Featured Switch
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Featured Listing",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
+                    OutlinedTextField(
+                        value = priceInput,
+                        onValueChange = { next ->
+                            val digits = next.filter(Char::isDigit)
+                            if (digits.length <= 9) priceInput = digits
+                        },
+                        label = { Text("Price") },
+                        prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
+                        isError = attemptedSubmit && !priceValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_price_input")
                     )
+                    OutlinedTextField(
+                        value = originalPriceInput,
+                        onValueChange = { next ->
+                            val digits = next.filter(Char::isDigit)
+                            if (digits.length <= 9) originalPriceInput = digits
+                        },
+                        label = { Text("Original Price") },
+                        prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
+                        isError = attemptedSubmit && !originalPriceValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_original_price_input")
+                    )
+                }
+
+                // Mileage + Origin
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = mileageInput,
+                        onValueChange = { if (it.length <= 60) mileageInput = it },
+                        label = { Text("Mileage") },
+                        placeholder = { Text("12,400 km") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_mileage_input")
+                    )
+                    OutlinedTextField(
+                        value = originInput,
+                        onValueChange = { if (it.length <= 100) originInput = it },
+                        label = { Text("Origin") },
+                        placeholder = { Text("Dubai / Japan") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_origin_input")
+                    )
+                }
+
+                // Transmission + Fuel Type + Color
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = transmissionInput,
+                        onValueChange = { if (it.length <= 80) transmissionInput = it },
+                        label = { Text("Transmission") },
+                        placeholder = { Text("Automatic") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = fuelTypeInput,
+                        onValueChange = { if (it.length <= 80) fuelTypeInput = it },
+                        label = { Text("Fuel Type") },
+                        placeholder = { Text("Petrol") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                OutlinedTextField(
+                    value = colorInput,
+                    onValueChange = { if (it.length <= 80) colorInput = it },
+                    label = { Text("Exterior Color") },
+                    placeholder = { Text("Pearl White") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Status Selector
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Highlight this vehicle on the portal showcase",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Lot Status",
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                Switch(
-                    checked = featured,
-                    onCheckedChange = { featured = it }
-                )
-            }
-
-            OutlinedTextField(
-                value = descriptionInput,
-                onValueChange = { if (it.length <= 4000) descriptionInput = it },
-                label = { Text("Description") },
-                minLines = 2,
-                maxLines = 4,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("vehicle_description_input")
-            )
-
-            OutlinedTextField(
-                value = tiktokUrlInput,
-                onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
-                label = { Text("TikTok Video URL") },
-                placeholder = { Text("https://www.tiktok.com/…") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            if (attemptedSubmit && !formValid) {
-                Text(
-                    text = "If entered, Year must be between 1950 and 2100 and Price must be valid.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    enabled = !isSaving,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp)
-                ) {
-                    Text("Cancel")
-                }
-
-                Button(
-                    onClick = {
-                        attemptedSubmit = true
-                        if (formValid) {
-                            val resolvedImageUrl = imageUrlInput.trim()
-                                .ifEmpty { "https://alifcarimport.com/placeholder.jpg" }
-                            onSubmit(
-                                VehicleDraft(
-                                    title = titleInput.trim(),
-                                    make = makeInput.trim(),
-                                    model = modelInput.trim(),
-                                    year = resolvedYear,
-                                    price = resolvedPrice,
-                                    originalPrice = parsedOriginalPrice,
-                                    mileage = mileageInput.trim(),
-                                    transmission = transmissionInput.trim(),
-                                    fuelType = fuelTypeInput.trim(),
-                                    color = colorInput.trim(),
-                                    origin = originInput.trim(),
-                                    imageUrl = resolvedImageUrl,
-                                    galleryImages = galleryImagesInput,
-                                    description = descriptionInput.trim(),
-                                    tiktokUrl = tiktokUrlInput.trim(),
-                                    status = selectedStatus,
-                                    featured = featured
-                                )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VehicleStatus.entries.forEach { status ->
+                            val colors = status.colors()
+                            FilterChip(
+                                selected = selectedStatus == status,
+                                onClick = { selectedStatus = status },
+                                label = { Text(status.label) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = colors.background,
+                                    selectedLabelColor = colors.foreground
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
                             )
                         }
-                    },
-                    enabled = !isSaving && !isProcessingPhoto,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier
-                        .weight(1.5f)
-                        .height(52.dp)
-                        .testTag("submit_vehicle_button")
+                    }
+                }
+
+                // Featured Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (isSaving || isProcessingPhoto) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Saving…")
-                    } else {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (editingVehicle == null) "Publish Vehicle" else "Save Changes",
-                            fontWeight = FontWeight.Bold
+                            text = "Featured Listing",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        Text(
+                            text = "Highlight this vehicle on the portal showcase",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = featured,
+                        onCheckedChange = { featured = it }
+                    )
+                }
+
+                OutlinedTextField(
+                    value = descriptionInput,
+                    onValueChange = { if (it.length <= 4000) descriptionInput = it },
+                    label = { Text("Description") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("vehicle_description_input")
+                )
+
+                OutlinedTextField(
+                    value = tiktokUrlInput,
+                    onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
+                    label = { Text("TikTok Video URL") },
+                    placeholder = { Text("https://www.tiktok.com/…") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (attemptedSubmit && !formValid) {
+                    Text(
+                        text = "If entered, Year must be between 1950 and 2100 and Price must be valid.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onBack,
+                        enabled = !isSaving,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = {
+                            attemptedSubmit = true
+                            if (formValid) {
+                                val resolvedImageUrl = imageUrlInput.trim()
+                                    .ifEmpty { "https://alifcarimport.com/placeholder.jpg" }
+                                onSubmit(
+                                    VehicleDraft(
+                                        title = titleInput.trim(),
+                                        make = makeInput.trim(),
+                                        model = modelInput.trim(),
+                                        year = resolvedYear,
+                                        price = resolvedPrice,
+                                        originalPrice = parsedOriginalPrice,
+                                        mileage = mileageInput.trim(),
+                                        transmission = transmissionInput.trim(),
+                                        fuelType = fuelTypeInput.trim(),
+                                        color = colorInput.trim(),
+                                        origin = originInput.trim(),
+                                        imageUrl = resolvedImageUrl,
+                                        galleryImages = galleryImagesInput,
+                                        description = descriptionInput.trim(),
+                                        tiktokUrl = tiktokUrlInput.trim(),
+                                        status = selectedStatus,
+                                        featured = featured
+                                    )
+                                )
+                            }
+                        },
+                        enabled = !isSaving && !isProcessingPhoto,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .weight(1.5f)
+                            .height(52.dp)
+                            .testTag("submit_vehicle_button")
+                    ) {
+                        if (isSaving || isProcessingPhoto) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Saving…")
+                        } else {
+                            Text(
+                                text = if (editingVehicle == null) "Publish Vehicle" else "Save Changes",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

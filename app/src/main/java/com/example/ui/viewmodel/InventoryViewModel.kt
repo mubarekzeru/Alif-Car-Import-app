@@ -171,7 +171,7 @@ class InventoryViewModel(
         _snackbarMessage.value = null
     }
 
-    fun saveQuickPrice(vehicle: Vehicle, newPrice: Long) {
+    fun saveQuickPrice(vehicle: Vehicle, newPrice: Long, onSuccess: () -> Unit = {}) {
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
@@ -180,6 +180,7 @@ class InventoryViewModel(
             result.onSuccess {
                 _priceEditVehicle.value = null
                 _snackbarMessage.value = "Updated ${vehicle.displayTitle} price"
+                onSuccess()
             }.onFailure { err ->
                 _snackbarMessage.value = err.localizedMessage ?: "Failed to update price"
             }
@@ -219,7 +220,11 @@ class InventoryViewModel(
         }
     }
 
-    fun submitVehicleForm(editingVehicleId: String?, draft: VehicleDraft) {
+    fun submitVehicleForm(
+        editingVehicleId: String?,
+        draft: VehicleDraft,
+        onSuccess: () -> Unit = {}
+    ) {
         if (_isMutating.value) return
         val summaryName = draft.title.ifBlank {
             listOf(draft.make, draft.model).filter { it.isNotBlank() }.joinToString(" ")
@@ -247,6 +252,7 @@ class InventoryViewModel(
                     } else {
                         "Saved changes to $summaryName"
                     }
+                    onSuccess()
                 }.onFailure { err ->
                     _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
                 }
@@ -257,6 +263,7 @@ class InventoryViewModel(
                 } else {
                     "Saved $summaryName — syncing to website"
                 }
+                onSuccess()
                 launch {
                     writeDeferred.await().onFailure { err ->
                         _snackbarMessage.value = err.localizedMessage ?: "Sync error while saving $summaryName"

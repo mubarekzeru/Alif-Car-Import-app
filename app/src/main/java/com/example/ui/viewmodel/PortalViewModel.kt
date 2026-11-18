@@ -14,6 +14,7 @@ import com.example.data.model.LoginSecurityAlert
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
+import com.example.ui.components.BottomNavTab
 import com.example.ui.components.NotificationCenterTab
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.google.firebase.auth.FirebaseUser
@@ -52,6 +53,9 @@ class PortalViewModel(
     private val repository: PortalRepository,
     private val securityRepository: SecuritySessionRepository
 ) : ViewModel() {
+
+    private val _bottomNavTab = MutableStateFlow(BottomNavTab.HOME)
+    val bottomNavTab: StateFlow<BottomNavTab> = _bottomNavTab.asStateFlow()
 
     private val _dashboardSection = MutableStateFlow(DashboardSection.INVENTORY)
     val dashboardSection: StateFlow<DashboardSection> = _dashboardSection.asStateFlow()
@@ -157,6 +161,10 @@ class PortalViewModel(
         securityRepository.stopObservingCloudSecurity()
     }
 
+    fun selectBottomNavTab(tab: BottomNavTab) {
+        _bottomNavTab.value = tab
+    }
+
     fun selectDashboardSection(section: DashboardSection) {
         _dashboardSection.value = section
     }
@@ -243,7 +251,7 @@ class PortalViewModel(
         _snackbarMessage.value = null
     }
 
-    fun saveShowroomConfig(config: ShowroomConfig) {
+    fun saveShowroomConfig(config: ShowroomConfig, onSuccess: () -> Unit = {}) {
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
@@ -251,14 +259,19 @@ class PortalViewModel(
             _isMutating.value = false
             result.onSuccess {
                 _activeSheet.value = ActivePortalSheet.NONE
-                _snackbarMessage.value = "Showroom settings synced to website"
+                _snackbarMessage.value = "Contact, social media & location synced to website"
+                onSuccess()
             }.onFailure { err ->
-                _snackbarMessage.value = err.localizedMessage ?: "Failed to save showroom settings"
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to save contact & location"
             }
         }
     }
 
-    fun saveTikTokPost(editingPostId: String?, draft: TikTokPostDraft) {
+    fun saveTikTokPost(
+        editingPostId: String?,
+        draft: TikTokPostDraft,
+        onSuccess: () -> Unit = {}
+    ) {
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
@@ -275,6 +288,7 @@ class PortalViewModel(
                 } else {
                     "Updated TikTok video link"
                 }
+                onSuccess()
             }.onFailure { err ->
                 _snackbarMessage.value = err.localizedMessage ?: "Failed to save TikTok video link"
             }
@@ -297,7 +311,7 @@ class PortalViewModel(
         }
     }
 
-    fun saveAdminEmails(emails: List<String>) {
+    fun saveAdminEmails(emails: List<String>, onSuccess: () -> Unit = {}) {
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
@@ -305,6 +319,7 @@ class PortalViewModel(
             _isMutating.value = false
             result.onSuccess {
                 _snackbarMessage.value = "Updated allowed admin emails"
+                onSuccess()
             }.onFailure { err ->
                 _snackbarMessage.value = err.localizedMessage ?: "Failed to update admin emails"
             }

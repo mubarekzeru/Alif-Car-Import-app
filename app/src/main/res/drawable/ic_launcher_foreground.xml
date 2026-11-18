@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/img_alif_logo"
+        android:drawable="@drawable/img_alif_launcher_logo"
         android:gravity="center" />
 </layer-list>

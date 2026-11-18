@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -70,11 +72,21 @@ fun VehicleInventoryCard(
 
     val status = vehicle.statusEnum
     val statusColors = status.colors()
-    val borderColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.outline
-    }
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        animationSpec = tween(durationMillis = 200),
+        label = "card_border_color"
+    )
+    val statusBgColor by animateColorAsState(
+        targetValue = statusColors.background,
+        animationSpec = tween(durationMillis = 200),
+        label = "status_bg_color"
+    )
+    val statusFgColor by animateColorAsState(
+        targetValue = statusColors.foreground,
+        animationSpec = tween(durationMillis = 200),
+        label = "status_fg_color"
+    )
 
     Card(
         modifier = modifier
@@ -101,6 +113,9 @@ fun VehicleInventoryCard(
                     ImageRequest.Builder(context)
                         .data(dataModel)
                         .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
+                        .size(336, 252)
+                        .crossfade(180)
+                        .allowHardware(true)
                         .build()
                 }
                 Box(
@@ -157,9 +172,9 @@ fun VehicleInventoryCard(
                     ) {
                         Box {
                             Surface(
-                                color = statusColors.background,
+                                color = statusBgColor,
                                 shape = CircleShape,
-                                border = BorderStroke(1.dp, statusColors.foreground.copy(alpha = 0.45f)),
+                                border = BorderStroke(1.dp, statusFgColor.copy(alpha = 0.45f)),
                                 modifier = Modifier
                                     .clip(CircleShape)
                                     .clickable { statusMenuExpanded = true }
@@ -174,12 +189,12 @@ fun VehicleInventoryCard(
                                         modifier = Modifier
                                             .size(7.dp)
                                             .clip(CircleShape)
-                                            .background(statusColors.foreground)
+                                            .background(statusFgColor)
                                     )
                                     Text(
                                         text = status.label.uppercase(),
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = statusColors.foreground,
+                                        color = statusFgColor,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }

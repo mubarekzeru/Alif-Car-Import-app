@@ -232,15 +232,38 @@ private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
         is com.google.firebase.Timestamp -> rawCreatedAt.toDate().toString()
         else -> ""
     }
+    val parsedYear = when (val raw = data["year"]) {
+        is Number -> raw.toLong()
+        is String -> raw.trim().toLongOrNull() ?: 2024L
+        else -> 2024L
+    }
+    val parsedPrice = when (val raw = data["price"]) {
+        is Number -> raw.toLong()
+        is String -> raw.replace(",", "").trim().toLongOrNull() ?: 0L
+        else -> 0L
+    }
+    val parsedOriginalPrice = when (val raw = data["originalPrice"]) {
+        is Number -> raw.toLong()
+        is String -> raw.replace(",", "").trim().toLongOrNull()
+        else -> null
+    }
+    val parsedFeatured = when (val raw = data["featured"]) {
+        is Boolean -> raw
+        is String -> raw.equals("true", ignoreCase = true)
+        else -> false
+    }
+    val parsedUpdatedAt = runCatching {
+        getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+    }.getOrNull()
 
     return Vehicle(
         id = docId,
         title = (data["title"] as? String).orEmpty(),
         make = (data["make"] as? String).orEmpty(),
         model = (data["model"] as? String).orEmpty(),
-        year = (data["year"] as? Number)?.toLong() ?: 2024L,
-        price = (data["price"] as? Number)?.toLong() ?: 0L,
-        originalPrice = (data["originalPrice"] as? Number)?.toLong(),
+        year = parsedYear,
+        price = parsedPrice,
+        originalPrice = parsedOriginalPrice,
         mileage = mileageString,
         transmission = (data["transmission"] as? String).orEmpty(),
         fuelType = (data["fuelType"] as? String).orEmpty(),
@@ -251,8 +274,8 @@ private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
         description = (data["description"] as? String).orEmpty(),
         tiktokUrl = (data["tiktokUrl"] as? String).orEmpty(),
         status = (data["status"] as? String) ?: VehicleStatus.AVAILABLE.value,
-        featured = (data["featured"] as? Boolean) ?: false,
+        featured = parsedFeatured,
         createdAt = createdAtString,
-        updatedAt = getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        updatedAt = parsedUpdatedAt
     )
 }

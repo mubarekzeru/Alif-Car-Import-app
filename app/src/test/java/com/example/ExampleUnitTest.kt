@@ -108,4 +108,34 @@ class ExampleUnitTest {
         assertEquals("8,200 mi", formatMileageDisplay("8,200 mi"))
         assertEquals("0 km", formatMileageDisplay("  "))
     }
+
+    @Test
+    fun portalModels_matchWebsiteFirestoreRulesSchema() {
+        val showroom = com.example.data.model.ShowroomConfig(
+            branding = com.example.data.model.BrandingConfig(companyName = " ", logoUrl = "", tagline = "Tag"),
+            contact = com.example.data.model.ContactConfig(phone = "+251911000000", telegram = "@alifcar")
+        ).toFirestoreMap()
+        val branding = showroom["branding"] as Map<*, *>
+        val contact = showroom["contact"] as Map<*, *>
+        assertEquals("Alif Car Import", branding["companyName"])
+        assertEquals("@alifcar", contact["telegram"])
+        assertFalse(contact.containsKey("instagram"))
+        assertTrue(showroom["updatedAt"] is FieldValue)
+
+        val ttCreate = com.example.data.model.TikTokPostDraft(
+            title = "LC300 Arrival",
+            caption = "Fresh arrival",
+            tiktokUrl = "https://www.tiktok.com/@alif/video/1",
+            coverImageUrl = "",
+            sortOrder = 2L
+        ).toCreateMap("tt_lc300_123456")
+        assertEquals("tt_lc300_123456", ttCreate["id"])
+        assertEquals(2L, ttCreate["sortOrder"])
+        assertTrue(ttCreate["updatedAt"] is FieldValue)
+
+        val normalized = com.example.data.model.AdminAccessConfig.normalizeEmails(
+            listOf(" User@Example.com ", "user@example.com", "", "Admin@Site.com")
+        )
+        assertEquals(listOf("user@example.com", "admin@site.com"), normalized)
+    }
 }

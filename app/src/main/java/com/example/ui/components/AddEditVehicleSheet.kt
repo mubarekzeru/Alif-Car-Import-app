@@ -18,10 +18,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
@@ -123,6 +126,9 @@ fun AddEditVehicleSheet(
     var imageUrlInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.imageUrl ?: "")
     }
+    var galleryImagesInput by remember(editingVehicle?.id) {
+        mutableStateOf(editingVehicle?.galleryImages ?: emptyList())
+    }
     var descriptionInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.description ?: "")
     }
@@ -142,6 +148,26 @@ fun AddEditVehicleSheet(
                 }
                 if (dataUrl != null) {
                     imageUrlInput = dataUrl
+                }
+                isProcessingPhoto = false
+            }
+        }
+    }
+
+    val galleryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(10)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            isProcessingPhoto = true
+            scope.launch {
+                val remaining = (10 - galleryImagesInput.size).coerceAtLeast(0)
+                val encoded = withContext(Dispatchers.IO) {
+                    uris.take(remaining).mapNotNull { uri ->
+                        encodePickedPhotoAsDataUrl(context, uri)
+                    }
+                }
+                if (encoded.isNotEmpty()) {
+                    galleryImagesInput = (galleryImagesInput + encoded).take(10)
                 }
                 isProcessingPhoto = false
             }
@@ -299,6 +325,72 @@ fun AddEditVehicleSheet(
                         .fillMaxWidth()
                         .testTag("vehicle_photo_url_input")
                 )
+            }
+
+            // Additional Gallery Photos (up to 10)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Gallery Photos (${galleryImagesInput.size}/10)",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (galleryImagesInput.size < 10) {
+                        OutlinedButton(
+                            onClick = {
+                                galleryPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier
+                                .height(40.dp)
+                                .testTag("add_gallery_photos_button")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Photos", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+                if (galleryImagesInput.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(galleryImagesInput) { index, img ->
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 84.dp, height = 64.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                AsyncImage(
+                                    model = decodeImageModel(img),
+                                    contentDescription = "Gallery photo ${index + 1}",
+                                    modifier = Modifier.matchParentSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                                IconButton(
+                                    onClick = {
+                                        galleryImagesInput = galleryImagesInput.filterIndexed { i, _ -> i != index }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove gallery photo ${index + 1}",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Year + Make
@@ -579,7 +671,7 @@ fun AddEditVehicleSheet(
                                         color = colorInput.trim(),
                                         origin = originInput.trim(),
                                         imageUrl = resolvedImageUrl,
-                                        galleryImages = editingVehicle?.galleryImages ?: emptyList(),
+                                        galleryImages = galleryImagesInput,
                                         description = descriptionInput.trim(),
                                         tiktokUrl = tiktokUrlInput.trim(),
                                         status = selectedStatus,

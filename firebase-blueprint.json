@@ -5,92 +5,32 @@
       "description": "A vehicle listing in the Alif Car Import / Alif Car Portal catalog.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Document ID matching /vehicles/{vehicleId}."
-        },
-        "title": {
-          "type": "string",
-          "description": "Listing headline (1-200 chars)."
-        },
-        "make": {
-          "type": "string",
-          "description": "Manufacturer (1-80 chars)."
-        },
-        "model": {
-          "type": "string",
-          "description": "Model name (1-120 chars)."
-        },
-        "year": {
-          "type": "integer",
-          "description": "Model year (1950-2100)."
-        },
-        "price": {
-          "type": "integer",
-          "description": "Asking price in USD (0-100,000,000)."
-        },
-        "originalPrice": {
-          "type": "integer",
-          "description": "Optional pre-discount price in USD."
-        },
-        "mileage": {
-          "type": "string",
-          "description": "Odometer reading string (0-60 chars)."
-        },
-        "transmission": {
-          "type": "string",
-          "description": "Transmission type (0-80 chars)."
-        },
-        "fuelType": {
-          "type": "string",
-          "description": "Fuel or powertrain type (0-80 chars)."
-        },
-        "color": {
-          "type": "string",
-          "description": "Exterior color (0-80 chars)."
-        },
-        "origin": {
-          "type": "string",
-          "description": "Import origin country/region (0-100 chars)."
-        },
-        "imageUrl": {
-          "type": "string",
-          "description": "Primary listing image URL or JPEG data URL (1-550,000 chars)."
-        },
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "make": { "type": "string" },
+        "model": { "type": "string" },
+        "year": { "type": "integer" },
+        "price": { "type": "integer" },
+        "originalPrice": { "type": "integer" },
+        "mileage": { "type": "string" },
+        "transmission": { "type": "string" },
+        "fuelType": { "type": "string" },
+        "color": { "type": "string" },
+        "origin": { "type": "string" },
+        "imageUrl": { "type": "string" },
         "galleryImages": {
           "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Optional additional gallery image URLs (up to 10)."
+          "items": { "type": "string" }
         },
-        "description": {
-          "type": "string",
-          "description": "Vehicle listing description (1-4,000 chars)."
-        },
-        "tiktokUrl": {
-          "type": "string",
-          "description": "Optional TikTok walkaround URL (0-500 chars)."
-        },
+        "description": { "type": "string" },
+        "tiktokUrl": { "type": "string" },
         "status": {
           "type": "string",
-          "enum": ["available", "reserved", "sold"],
-          "description": "Current lot availability status."
+          "enum": ["available", "reserved", "sold"]
         },
-        "featured": {
-          "type": "boolean",
-          "description": "Whether the vehicle is featured on the website."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Immutable ISO-8601 creation timestamp string."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server-assigned last update timestamp via FieldValue.serverTimestamp()."
-        }
+        "featured": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "id",
@@ -112,14 +52,81 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "ShowroomConfig": {
+      "title": "ShowroomConfig",
+      "description": "Website branding, hero banner, TikTok showcase section, and contact/social info.",
+      "type": "object",
+      "properties": {
+        "branding": { "type": "object" },
+        "hero": { "type": "object" },
+        "tiktok": { "type": "object" },
+        "contact": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["branding", "hero", "tiktok", "contact", "updatedAt"]
+    },
+    "AdminAccessConfig": {
+      "title": "AdminAccessConfig",
+      "description": "Allowlist of additional admin email addresses.",
+      "type": "object",
+      "properties": {
+        "adminEmails": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminEmails", "updatedAt"]
+    },
+    "TikTokPost": {
+      "title": "TikTokPost",
+      "description": "TikTok walkaround post displayed on the showroom portal.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "caption": { "type": "string" },
+        "tiktokUrl": { "type": "string" },
+        "coverImageUrl": { "type": "string" },
+        "sortOrder": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "caption", "tiktokUrl", "coverImageUrl", "sortOrder", "updatedAt"]
+    },
+    "CustomerInquiry": {
+      "title": "CustomerInquiry",
+      "description": "Customer inquiry lead submitted from the website.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "vehicleTitle": { "type": "string" },
+        "message": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "phone", "vehicleTitle", "message", "createdAt"]
     }
   },
   "firestore": {
     "/vehicles/{vehicleId}": {
-      "schema": {
-        "$ref": "#/entities/Vehicle"
-      },
+      "schema": { "$ref": "#/entities/Vehicle" },
       "description": "Publicly readable, admin-writable Alif Car Portal vehicle inventory."
+    },
+    "/config/showroom": {
+      "schema": { "$ref": "#/entities/ShowroomConfig" },
+      "description": "Showroom branding, hero, TikTok config, and contact/social settings."
+    },
+    "/config/adminAccess": {
+      "schema": { "$ref": "#/entities/AdminAccessConfig" },
+      "description": "Admin email allowlist."
+    },
+    "/tiktokPosts/{postId}": {
+      "schema": { "$ref": "#/entities/TikTokPost" },
+      "description": "Showroom TikTok walkaround showcase posts."
+    },
+    "/inquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/CustomerInquiry" },
+      "description": "Customer inquiries submitted on the website."
     }
   }
 }

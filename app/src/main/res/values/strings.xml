@@ -2,9 +2,10 @@
     <string name="app_name">Alif Car Import</string>
     <string name="auth_headline">Alif Car Import</string>
     <string name="auth_subtitle">Mobile dealership inventory and pricing control synced live with your Alif Car Portal website.</string>
-    <string name="auth_sign_in_google">Sign in with Google</string>
+    <string name="auth_sign_in_google">Continue with Google</string>
+    <string name="auth_sign_in_email">Sign in with Email &amp; Password</string>
     <string name="auth_checking_session">Checking admin session…</string>
-    <string name="dashboard_title">Alif Car Import</string>
+    <string name="dashboard_title">Inventory</string>
     <string name="action_add_vehicle">Add Vehicle</string>
     <string name="action_search_vehicles">Search make, model, year, origin, or ID</string>
     <string name="action_sign_out">Sign out</string>

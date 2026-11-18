@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import android.util.LruCache
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.graphics.Color
 import com.example.R
@@ -22,6 +23,8 @@ import java.io.ByteArrayOutputStream
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+private val decodedDataUrlCache = object : LruCache<String, ByteArray>(48) {}
 
 private val usdFormatter: NumberFormat
     get() = NumberFormat.getCurrencyInstance(Locale.US).apply {
@@ -62,11 +65,14 @@ fun StudioPreset.studioDrawableRes(): Int = when (this) {
 fun decodeImageModel(imageUrl: String?, fallbackPreset: StudioPreset = StudioPreset.SUV): Any {
     val trimmed = imageUrl?.trim().orEmpty()
     if (trimmed.startsWith("data:image", ignoreCase = true)) {
+        val cacheKey = "${trimmed.length}:${trimmed.hashCode()}"
+        decodedDataUrlCache.get(cacheKey)?.let { return it }
         val commaIndex = trimmed.indexOf(',')
         if (commaIndex != -1 && commaIndex + 1 < trimmed.length) {
             val base64Part = trimmed.substring(commaIndex + 1)
             val decoded = runCatching { Base64.decode(base64Part, Base64.DEFAULT) }.getOrNull()
             if (decoded != null && decoded.isNotEmpty()) {
+                decodedDataUrlCache.put(cacheKey, decoded)
                 return decoded
             }
         }

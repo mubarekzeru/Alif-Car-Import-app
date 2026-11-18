@@ -1,6 +1,17 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -24,17 +35,21 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,24 +85,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.R
+import com.example.data.firebase.InquiriesState
 import com.example.data.model.Vehicle
 import com.example.ui.components.AddEditVehicleSheet
+import com.example.ui.components.AdminAccessSheet
+import com.example.ui.components.InquiriesSheet
 import com.example.ui.components.LotMetricsStrip
 import com.example.ui.components.QuickPriceEditSheet
+import com.example.ui.components.ShowroomConfigSheet
+import com.example.ui.components.TikTokPostsSheet
 import com.example.ui.components.VehicleInventoryCard
+import com.example.ui.components.decodeImageModel
+import com.example.ui.viewmodel.ActivePortalSheet
 import com.example.ui.viewmodel.FormSheetMode
 import com.example.ui.viewmodel.InventoryUiState
 import com.example.ui.viewmodel.InventoryViewModel
 import com.example.ui.viewmodel.LotMetrics
+import com.example.ui.viewmodel.PortalViewModel
 import com.example.ui.viewmodel.StatusFilter
 import com.example.ui.viewmodel.VehicleSortOrder
 
@@ -95,6 +120,7 @@ import com.example.ui.viewmodel.VehicleSortOrder
 @Composable
 fun DashboardScreen(
     viewModel: InventoryViewModel,
+    portalViewModel: PortalViewModel,
     userEmail: String?,
     onOpenVehicleDetail: (String) -> Unit,
     onSignOutClick: () -> Unit
@@ -108,14 +134,49 @@ fun DashboardScreen(
     val formSheetState by viewModel.formSheetState.collectAsStateWithLifecycle()
     val deleteCandidate by viewModel.deleteCandidate.collectAsStateWithLifecycle()
 
+    val activePortalSheet by portalViewModel.activeSheet.collectAsStateWithLifecycle()
+    val isPortalMutating by portalViewModel.isMutating.collectAsStateWithLifecycle()
+    val portalSnackbar by portalViewModel.snackbarMessage.collectAsStateWithLifecycle()
+    val showroomConfig by portalViewModel.showroomConfig.collectAsStateWithLifecycle()
+    val tikTokPosts by portalViewModel.tikTokPosts.collectAsStateWithLifecycle()
+    val inquiriesState by portalViewModel.inquiriesState.collectAsStateWithLifecycle()
+    val adminAccessState by portalViewModel.adminAccessState.collectAsStateWithLifecycle()
+
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var accountMenuExpanded by remember { mutableStateOf(false) }
+
+    val brandDisplayName = showroomConfig.branding.companyName
+        .trim()
+        .ifBlank { stringResource(R.string.app_name) }
+    val brandLogoUrl = showroomConfig.branding.logoUrl.trim()
+    val brandLogoRequest = remember(brandLogoUrl) {
+        val model: Any = if (
+            brandLogoUrl.startsWith("data:image", ignoreCase = true) ||
+            brandLogoUrl.startsWith("http://", ignoreCase = true) ||
+            brandLogoUrl.startsWith("https://", ignoreCase = true)
+        ) {
+            decodeImageModel(brandLogoUrl)
+        } else {
+            R.drawable.img_alif_logo
+        }
+        ImageRequest.Builder(context)
+            .data(model)
+            .crossfade(160)
+            .build()
+    }
 
     LaunchedEffect(snackbarMessage) {
         val message = snackbarMessage ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(message)
         viewModel.consumeSnackbar()
+    }
+
+    LaunchedEffect(portalSnackbar) {
+        val message = portalSnackbar ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        portalViewModel.consumeSnackbar()
     }
 
     Scaffold(
@@ -129,37 +190,12 @@ fun DashboardScreen(
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 ),
                 title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            color = Color.White,
-                            shape = CircleShape,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            AsyncImage(
-                                model = R.drawable.img_alif_logo,
-                                contentDescription = "Alif Car Import logo",
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(2.dp)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = stringResource(R.string.dashboard_title),
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                            Text(
-                                text = "ADMIN PORTAL",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    Text(
+                        text = stringResource(R.string.dashboard_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 },
                 actions = {
                     IconButton(
@@ -217,29 +253,122 @@ fun DashboardScreen(
                             onClick = { accountMenuExpanded = true },
                             modifier = Modifier.testTag("account_menu_button")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.AccountCircle,
-                                contentDescription = "Account menu"
-                            )
+                            Surface(
+                                color = Color.White,
+                                shape = CircleShape,
+                                border = BorderStroke(
+                                    width = 1.5.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                                ),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                AsyncImage(
+                                    model = brandLogoRequest,
+                                    contentDescription = "$brandDisplayName profile menu",
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(2.dp)
+                                        .clip(CircleShape),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         }
                         DropdownMenu(
                             expanded = accountMenuExpanded,
                             onDismissRequest = { accountMenuExpanded = false }
                         ) {
-                            if (!userEmail.isNullOrBlank()) {
-                                DropdownMenuItem(
-                                    text = {
+                            Row(
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    color = Color.White,
+                                    shape = CircleShape,
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                    ),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = brandLogoRequest,
+                                        contentDescription = brandDisplayName,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(2.dp)
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = brandDisplayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "ADMIN PORTAL",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    if (!userEmail.isNullOrBlank()) {
                                         Text(
                                             text = userEmail,
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                    },
-                                    onClick = {},
-                                    enabled = false
-                                )
-                                HorizontalDivider()
+                                    }
+                                }
                             }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Showroom & Contact") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Storefront, contentDescription = null)
+                                },
+                                onClick = {
+                                    accountMenuExpanded = false
+                                    portalViewModel.openSheet(ActivePortalSheet.SHOWROOM)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("TikTok Posts (${tikTokPosts.size})") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.VideoLibrary, contentDescription = null)
+                                },
+                                onClick = {
+                                    accountMenuExpanded = false
+                                    portalViewModel.openSheet(ActivePortalSheet.TIKTOK_POSTS)
+                                }
+                            )
+                            val inquiryCountSuffix = (inquiriesState as? InquiriesState.Success)
+                                ?.inquiries?.size?.let { " ($it)" } ?: ""
+                            DropdownMenuItem(
+                                text = { Text("Customer Inquiries$inquiryCountSuffix") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Forum, contentDescription = null)
+                                },
+                                onClick = {
+                                    accountMenuExpanded = false
+                                    portalViewModel.openSheet(ActivePortalSheet.INQUIRIES)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Admin Access") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.AdminPanelSettings, contentDescription = null)
+                                },
+                                onClick = {
+                                    accountMenuExpanded = false
+                                    portalViewModel.openSheet(ActivePortalSheet.ADMIN_ACCESS)
+                                }
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.action_sign_out)) },
                                 leadingIcon = {
@@ -288,7 +417,21 @@ fun DashboardScreen(
             val isMediumGrid = maxWidth in 600.dp..839.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
-                AnimatedVisibility(visible = filterState.isSearchExpanded) {
+                AnimatedVisibility(
+                    visible = filterState.isSearchExpanded,
+                    enter = expandVertically(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    ) + fadeIn(tween(180)),
+                    exit = shrinkVertically(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ) + fadeOut(tween(140))
+                ) {
                     OutlinedTextField(
                         value = filterState.searchQuery,
                         onValueChange = viewModel::updateSearchQuery,
@@ -311,53 +454,69 @@ fun DashboardScreen(
                     )
                 }
 
-                when (val state = uiState) {
-                    InventoryUiState.Loading -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                AnimatedContent(
+                    targetState = uiState,
+                    contentKey = { state ->
+                        when (state) {
+                            InventoryUiState.Loading -> "loading"
+                            is InventoryUiState.Error -> "error"
+                            is InventoryUiState.Success -> "success"
+                        }
+                    },
+                    transitionSpec = {
+                        fadeIn(tween(240, easing = FastOutSlowInEasing)) togetherWith
+                            fadeOut(tween(160))
+                    },
+                    label = "inventory_state_transition"
+                ) { state ->
+                    when (state) {
+                        InventoryUiState.Loading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
                             ) {
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                                Text(
-                                    text = "Syncing cloud lot inventory…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                    Text(
+                                        text = "Syncing cloud lot inventory…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    is InventoryUiState.Error -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(24.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                        is InventoryUiState.Error -> {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = stringResource(R.string.error_load_inventory),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                Text(
-                                    text = state.message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center
-                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.error_load_inventory),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
+                                        text = state.message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    is InventoryUiState.Success -> {
+                        is InventoryUiState.Success -> {
+                            Column(modifier = Modifier.fillMaxSize()) {
                         Spacer(modifier = Modifier.height(4.dp))
                         LotMetricsStrip(metrics = state.metrics)
                         Spacer(modifier = Modifier.height(12.dp))
@@ -438,6 +597,8 @@ fun DashboardScreen(
                                 onAddVehicleClick = viewModel::openAddVehicleSheet
                             )
                         }
+                            }
+                        }
                     }
                 }
             }
@@ -496,6 +657,41 @@ fun DashboardScreen(
             }
         )
     }
+
+    when (activePortalSheet) {
+        ActivePortalSheet.NONE -> Unit
+        ActivePortalSheet.SHOWROOM -> {
+            ShowroomConfigSheet(
+                config = showroomConfig,
+                isSaving = isPortalMutating,
+                onDismiss = portalViewModel::dismissSheet,
+                onSave = portalViewModel::saveShowroomConfig
+            )
+        }
+        ActivePortalSheet.TIKTOK_POSTS -> {
+            TikTokPostsSheet(
+                posts = tikTokPosts,
+                isSaving = isPortalMutating,
+                onDismiss = portalViewModel::dismissSheet,
+                onSavePost = portalViewModel::saveTikTokPost,
+                onDeletePost = portalViewModel::deleteTikTokPost
+            )
+        }
+        ActivePortalSheet.INQUIRIES -> {
+            InquiriesSheet(
+                state = inquiriesState,
+                onDismiss = portalViewModel::dismissSheet
+            )
+        }
+        ActivePortalSheet.ADMIN_ACCESS -> {
+            AdminAccessSheet(
+                state = adminAccessState,
+                isSaving = isPortalMutating,
+                onDismiss = portalViewModel::dismissSheet,
+                onSaveEmails = portalViewModel::saveAdminEmails
+            )
+        }
+    }
 }
 
 @Composable
@@ -517,6 +713,25 @@ private fun StatusFilterRow(
                 StatusFilter.SOLD -> metrics.soldCount
             }
             val isSelected = selected == filter
+            val containerColor by animateColorAsState(
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                animationSpec = tween(180),
+                label = "chip_container"
+            )
+            val labelColor by animateColorAsState(
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                animationSpec = tween(180),
+                label = "chip_label"
+            )
+            val borderColor by animateColorAsState(
+                targetValue = if (isSelected) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                } else {
+                    MaterialTheme.colorScheme.outline
+                },
+                animationSpec = tween(180),
+                label = "chip_border"
+            )
             FilterChip(
                 selected = isSelected,
                 onClick = { onSelect(filter) },
@@ -527,19 +742,12 @@ private fun StatusFilterRow(
                     )
                 },
                 colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.primary,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    selectedContainerColor = containerColor,
+                    selectedLabelColor = labelColor,
+                    containerColor = containerColor,
+                    labelColor = labelColor
                 ),
-                border = BorderStroke(
-                    width = 1.dp,
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    }
-                ),
+                border = BorderStroke(width = 1.dp, color = borderColor),
                 modifier = Modifier
                     .height(42.dp)
                     .testTag("status_tab_${filter.name.lowercase()}")
@@ -566,15 +774,23 @@ private fun InventoryFeedContent(
         return
     }
 
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+
     if (isGrid) {
         LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Fixed(2),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(vehicles, key = { it.id }) { vehicle ->
+            items(
+                items = vehicles,
+                key = { it.id },
+                contentType = { "vehicle_card" }
+            ) { vehicle ->
                 VehicleInventoryCard(
                     vehicle = vehicle,
                     isSelected = vehicle.id == selectedVehicleId,
@@ -583,17 +799,27 @@ private fun InventoryFeedContent(
                     onStatusChange = { status -> onStatusChange(vehicle, status) },
                     onToggleFeatured = { onToggleFeatured(vehicle) },
                     onEditClick = { onEditClick(vehicle) },
-                    onDeleteClick = { onDeleteClick(vehicle) }
+                    onDeleteClick = { onDeleteClick(vehicle) },
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = tween(200),
+                        placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        fadeOutSpec = tween(160)
+                    )
                 )
             }
         }
     } else {
         LazyColumn(
+            state = listState,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(vehicles, key = { it.id }) { vehicle ->
+            items(
+                items = vehicles,
+                key = { it.id },
+                contentType = { "vehicle_card" }
+            ) { vehicle ->
                 VehicleInventoryCard(
                     vehicle = vehicle,
                     isSelected = vehicle.id == selectedVehicleId,
@@ -602,7 +828,12 @@ private fun InventoryFeedContent(
                     onStatusChange = { status -> onStatusChange(vehicle, status) },
                     onToggleFeatured = { onToggleFeatured(vehicle) },
                     onEditClick = { onEditClick(vehicle) },
-                    onDeleteClick = { onDeleteClick(vehicle) }
+                    onDeleteClick = { onDeleteClick(vehicle) },
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = tween(200),
+                        placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        fadeOutSpec = tween(160)
+                    )
                 )
             }
         }

@@ -1,7 +1,15 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +60,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,10 +81,10 @@ import coil.request.ImageRequest
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.components.colors
+import com.example.ui.components.decodeImageModel
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
 import com.example.ui.components.formatTimestamp
-import com.example.ui.components.resolveImageModel
 import com.example.ui.theme.JetBrainsMonoFontFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -172,6 +186,14 @@ fun VehicleDetailPane(
     modifier: Modifier = Modifier
 ) {
     val statusColors = vehicle.statusEnum.colors()
+    val allPhotos = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
+        buildList {
+            if (vehicle.imageUrl.isNotBlank()) add(vehicle.imageUrl)
+            addAll(vehicle.galleryImages.filter { it.isNotBlank() && it != vehicle.imageUrl })
+        }
+    }
+    var selectedPhotoIndex by remember(vehicle.id, allPhotos.size) { mutableIntStateOf(0) }
+    val activePhotoUrl = allPhotos.getOrNull(selectedPhotoIndex) ?: vehicle.imageUrl
 
     Column(
         modifier = modifier
@@ -180,12 +202,6 @@ fun VehicleDetailPane(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         val context = LocalContext.current
-        val detailImageRequest = androidx.compose.runtime.remember(vehicle.id, vehicle.imageUrl) {
-            ImageRequest.Builder(context)
-                .data(vehicle.resolveImageModel())
-                .memoryCacheKey("veh_detail_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
-                .build()
-        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -193,12 +209,27 @@ fun VehicleDetailPane(
                 .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            AsyncImage(
-                model = detailImageRequest,
-                contentDescription = vehicle.displayTitle,
-                modifier = Modifier.matchParentSize(),
-                contentScale = ContentScale.Crop
-            )
+            AnimatedContent(
+                targetState = activePhotoUrl,
+                transitionSpec = {
+                    fadeIn(tween(220)) togetherWith fadeOut(tween(150))
+                },
+                label = "detail_hero_photo"
+            ) { photoUrl ->
+                val detailImageRequest = remember(vehicle.id, photoUrl) {
+                    ImageRequest.Builder(context)
+                        .data(decodeImageModel(photoUrl))
+                        .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
+                        .crossfade(180)
+                        .build()
+                }
+                AsyncImage(
+                    model = detailImageRequest,
+                    contentDescription = vehicle.displayTitle,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
             Surface(
                 color = statusColors.background,
                 shape = CircleShape,
@@ -240,6 +271,46 @@ fun VehicleDetailPane(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        if (allPhotos.size > 1) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(allPhotos) { index, photo ->
+                    val isSelected = index == selectedPhotoIndex
+                    val thumbBorder by animateColorAsState(
+                        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        animationSpec = tween(180),
+                        label = "thumb_border"
+                    )
+                    val thumbRequest = remember(vehicle.id, photo) {
+                        ImageRequest.Builder(context)
+                            .data(decodeImageModel(photo))
+                            .memoryCacheKey("veh_thumb_${vehicle.id}_${photo.hashCode()}")
+                            .size(228, 168)
+                            .crossfade(150)
+                            .build()
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(width = 76.dp, height = 56.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = thumbBorder,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            .clickable { selectedPhotoIndex = index }
+                    ) {
+                        AsyncImage(
+                            model = thumbRequest,
+                            contentDescription = "Vehicle photo ${index + 1}",
+                            modifier = Modifier.matchParentSize(),
+                            contentScale = ContentScale.Crop
                         )
                     }
                 }

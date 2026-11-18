@@ -236,3 +236,67 @@ test("Rejects mismatched id, empty imageUrl/description, or mutating createdAt",
     })
   );
 });
+
+test("Showroom config, TikTok posts, inquiries, and adminAccess enforce website rules", async () => {
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // Showroom config write by owner, read by public, write denied to non-admin
+  const showroomPayload = {
+    branding: { companyName: "Alif Car Import", logoUrl: "", tagline: "Direct imports" },
+    hero: { kicker: "NEW", title: "Direct Imports", description: "Clean cars", imageUrl: "", ctaLabel: "Browse" },
+    tiktok: { title: "TikTok", description: "Clips", profileUrl: "", handle: "@alif" },
+    contact: {
+      addressLine: "Bole",
+      cityCountry: "Addis Ababa",
+      hours: "9-6",
+      phone: "+251900",
+      whatsapp: "+251900",
+      email: "info@alif.com",
+      mapsUrl: "",
+      landmarkNote: "",
+    },
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(ownerDb.collection("config").doc("showroom").set(showroomPayload));
+  await assertSucceeds(nonAdminDb.collection("config").doc("showroom").get());
+  await assertFails(nonAdminDb.collection("config").doc("showroom").set(showroomPayload));
+
+  // TikTok posts CRUD by owner, read by public, write denied to non-admin
+  const ttPayload = {
+    id: "tt_clip_1",
+    title: "2024 Prado",
+    caption: "Fresh arrival",
+    tiktokUrl: "https://www.tiktok.com/@alif/video/1",
+    coverImageUrl: "",
+    sortOrder: 0,
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(ownerDb.collection("tiktokPosts").doc("tt_clip_1").set(ttPayload));
+  await assertSucceeds(nonAdminDb.collection("tiktokPosts").get());
+  await assertFails(nonAdminDb.collection("tiktokPosts").doc("tt_clip_2").set({ ...ttPayload, id: "tt_clip_2" }));
+
+  // Inquiries create by anyone, list only by bootstrap owner
+  await assertSucceeds(
+    nonAdminDb.collection("inquiries").doc("inq_1").set({
+      id: "inq_1",
+      name: "Abebe",
+      phone: "+251911",
+      vehicleTitle: "2024 Lexus RX",
+      message: "Interested",
+      createdAt: serverTimestamp(),
+    })
+  );
+  await assertSucceeds(ownerDb.collection("inquiries").get());
+  await assertFails(nonAdminDb.collection("inquiries").get());
+});

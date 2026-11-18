@@ -55,8 +55,13 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
 
+      - name: Prepare Branded APK Filename
+        run: |
+          mkdir -p dist-apk
+          cp app/build/outputs/apk/debug/app-debug.apk "dist-apk/Alif Car Imports.apk"
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Alif-Car-Admin-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: dist-apk/Alif Car Imports.apk

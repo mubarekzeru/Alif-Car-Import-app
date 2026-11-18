@@ -198,10 +198,8 @@ class VehicleRepository(
 
     private fun validateDraftBounds(draft: VehicleDraft) {
         require(draft.year in 1950L..2100L) { "Model year must be between 1950 and 2100." }
-        require(draft.make.trim().length in 1..80) { "Make must be 1 to 80 characters." }
-        require(draft.model.trim().length in 1..120) { "Model must be 1 to 120 characters." }
         require(draft.price in 0L..100_000_000L) { "Price must be between 0 and 100,000,000." }
-        require(draft.imageUrl.trim().length in 1..550_000) { "Vehicle image is required (max 550 KB)." }
+        require(draft.imageUrl.trim().length in 1..550_000) { "Vehicle image is too large (max 550 KB)." }
     }
 
     private fun generateVehicleId(year: Long, make: String, model: String): String {

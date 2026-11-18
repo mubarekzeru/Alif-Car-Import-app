@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
@@ -108,28 +109,42 @@ fun VehicleInventoryCard(
                 verticalAlignment = Alignment.Top
             ) {
                 val context = LocalContext.current
-                val imageRequest = remember(vehicle.id, vehicle.imageUrl) {
-                    val dataModel = vehicle.resolveImageModel()
-                    ImageRequest.Builder(context)
-                        .data(dataModel)
-                        .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
-                        .size(336, 252)
-                        .crossfade(180)
-                        .allowHardware(true)
-                        .build()
+                val dataModel = remember(vehicle.id, vehicle.imageUrl) {
+                    vehicle.resolveImageModel()
+                }
+                val imageRequest = remember(vehicle.id, dataModel) {
+                    dataModel?.let {
+                        ImageRequest.Builder(context)
+                            .data(it)
+                            .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
+                            .size(336, 252)
+                            .crossfade(180)
+                            .allowHardware(true)
+                            .build()
+                    }
                 }
                 Box(
                     modifier = Modifier
                         .size(width = 112.dp, height = 84.dp)
                         .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = vehicle.displayTitle,
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                    if (imageRequest != null) {
+                        AsyncImage(
+                            model = imageRequest,
+                            contentDescription = vehicle.displayTitle,
+                            modifier = Modifier.matchParentSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = vehicle.displayTitle,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
                     if (vehicle.featured) {
                         Surface(
                             color = MaterialTheme.colorScheme.primary,

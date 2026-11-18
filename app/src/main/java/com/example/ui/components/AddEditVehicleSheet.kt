@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,12 +39,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,12 +62,14 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.data.model.StudioPreset
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleDraft
 import com.example.data.model.VehicleStatus
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -78,7 +83,8 @@ fun AddEditVehicleSheet(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetState = rememberNonDismissibleSheetState()
+    val scrollLockConnection = rememberSheetScrollLockConnection()
     var isProcessingPhoto by remember { mutableStateOf(false) }
 
     var yearInput by remember(editingVehicle?.id) {
@@ -100,13 +106,13 @@ fun AddEditVehicleSheet(
         mutableStateOf(editingVehicle?.originalPrice?.toString() ?: "")
     }
     var mileageInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.mileage ?: "0 km")
+        mutableStateOf(editingVehicle?.mileage ?: "")
     }
     var transmissionInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.transmission?.ifBlank { "Automatic" } ?: "Automatic")
+        mutableStateOf(editingVehicle?.transmission ?: "")
     }
     var fuelTypeInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.fuelType?.ifBlank { "Petrol" } ?: "Petrol")
+        mutableStateOf(editingVehicle?.fuelType ?: "")
     }
     var colorInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.color ?: "")
@@ -120,11 +126,15 @@ fun AddEditVehicleSheet(
     var featured by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.featured ?: false)
     }
-    var selectedPreset by remember(editingVehicle?.id) {
-        mutableStateOf(StudioPreset.SUV)
-    }
     var imageUrlInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.imageUrl ?: "")
+        val existingUrl = editingVehicle?.imageUrl.orEmpty()
+        mutableStateOf(
+            if (existingUrl.equals("https://alifcarimport.com/placeholder.jpg", ignoreCase = true)) {
+                ""
+            } else {
+                existingUrl
+            }
+        )
     }
     var galleryImagesInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.galleryImages ?: emptyList())
@@ -162,8 +172,10 @@ fun AddEditVehicleSheet(
             scope.launch {
                 val remaining = (10 - galleryImagesInput.size).coerceAtLeast(0)
                 val encoded = withContext(Dispatchers.IO) {
-                    uris.take(remaining).mapNotNull { uri ->
-                        encodePickedPhotoAsDataUrl(context, uri)
+                    coroutineScope {
+                        uris.take(remaining).map { uri ->
+                            async { encodeGalleryPhotoAsDataUrl(context, uri) }
+                        }.awaitAll().filterNotNull()
                     }
                 }
                 if (encoded.isNotEmpty()) {
@@ -174,53 +186,82 @@ fun AddEditVehicleSheet(
         }
     }
 
-    val parsedYear = yearInput.toLongOrNull()
-    val parsedPrice = priceInput.toLongOrNull()
+    val trimmedYear = yearInput.trim()
+    val parsedYear = trimmedYear.takeIf { it.isNotEmpty() }?.toLongOrNull()
+    val resolvedYear = parsedYear ?: 2024L
+
+    val trimmedPrice = priceInput.trim()
+    val parsedPrice = trimmedPrice.takeIf { it.isNotEmpty() }?.toLongOrNull()
+    val resolvedPrice = parsedPrice ?: 0L
+
     val parsedOriginalPrice = originalPriceInput.trim().takeIf { it.isNotEmpty() }?.toLongOrNull()
 
-    val yearValid = parsedYear != null && parsedYear in 1950L..2100L
-    val makeValid = makeInput.trim().length in 1..80
-    val modelValid = modelInput.trim().length in 1..120
-    val priceValid = parsedPrice != null && parsedPrice in 0L..100_000_000L
+    val yearValid = trimmedYear.isEmpty() || (parsedYear != null && parsedYear in 1950L..2100L)
+    val priceValid = trimmedPrice.isEmpty() || (parsedPrice != null && parsedPrice in 0L..100_000_000L)
     val originalPriceValid = originalPriceInput.trim().isEmpty() ||
         (parsedOriginalPrice != null && parsedOriginalPrice in 0L..100_000_000L)
-    val formValid = yearValid && makeValid && modelValid && priceValid && originalPriceValid
+    val formValid = yearValid && priceValid && originalPriceValid
 
-    val previewModel: Any = remember(imageUrlInput, selectedPreset) {
-        decodeImageModel(imageUrlInput, fallbackPreset = selectedPreset)
+    val previewModel: Any? = remember(imageUrlInput) {
+        decodeImageModel(imageUrlInput)
     }
     val hasPickedDataUrl = imageUrlInput.startsWith("data:image", ignoreCase = true)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        dragHandle = null,
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .nestedScroll(scrollLockConnection)
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp),
+                .padding(top = 18.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = if (editingVehicle == null) "QUICK VEHICLE INTAKE" else "EDIT VEHICLE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = if (editingVehicle == null) {
-                        "Publish Vehicle to Portal"
-                    } else {
-                        editingVehicle.displayTitle
-                    },
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = if (editingVehicle == null) "QUICK VEHICLE INTAKE" else "EDIT VEHICLE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = if (editingVehicle == null) {
+                            "Publish Vehicle to Portal"
+                        } else {
+                            editingVehicle.displayTitle
+                        },
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    enabled = !isSaving,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("close_vehicle_sheet_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close vehicle form"
+                    )
+                }
             }
 
             // Photo Picker + Preview
@@ -233,14 +274,24 @@ fun AddEditVehicleSheet(
                     modifier = Modifier
                         .size(width = 120.dp, height = 88.dp)
                         .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
                 ) {
-                    AsyncImage(
-                        model = previewModel,
-                        contentDescription = "Vehicle photo preview",
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                    if (previewModel != null) {
+                        AsyncImage(
+                            model = previewModel,
+                            contentDescription = "Vehicle photo preview",
+                            modifier = Modifier.matchParentSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = "No vehicle photo selected",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                     if (imageUrlInput.isNotBlank()) {
                         IconButton(
                             onClick = { imageUrlInput = "" },
@@ -285,7 +336,7 @@ fun AddEditVehicleSheet(
                         text = if (hasPickedDataUrl) {
                             "Photo compressed for web & mobile sync."
                         } else {
-                            "Pick a photo, paste URL, or use studio ${selectedPreset.label}."
+                            "Pick a photo from your device or paste an image URL."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -293,31 +344,11 @@ fun AddEditVehicleSheet(
                 }
             }
 
-            if (imageUrlInput.isBlank()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StudioPreset.entries.forEach { preset ->
-                        FilterChip(
-                            selected = selectedPreset == preset,
-                            onClick = { selectedPreset = preset },
-                            label = { Text(preset.label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.height(40.dp)
-                        )
-                    }
-                }
-            }
-
             if (!hasPickedDataUrl) {
                 OutlinedTextField(
                     value = imageUrlInput,
                     onValueChange = { if (it.length <= 550_000) imageUrlInput = it },
-                    label = { Text("Image URL (optional if using studio photo)") },
+                    label = { Text("Image URL") },
                     placeholder = { Text("https://…") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -401,7 +432,7 @@ fun AddEditVehicleSheet(
                 OutlinedTextField(
                     value = yearInput,
                     onValueChange = { if (it.length <= 4) yearInput = it.filter(Char::isDigit) },
-                    label = { Text("Year *") },
+                    label = { Text("Year") },
                     isError = attemptedSubmit && !yearValid,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -412,9 +443,8 @@ fun AddEditVehicleSheet(
                 OutlinedTextField(
                     value = makeInput,
                     onValueChange = { if (it.length <= 80) makeInput = it },
-                    label = { Text("Make *") },
+                    label = { Text("Make") },
                     placeholder = { Text("Lexus") },
-                    isError = attemptedSubmit && !makeValid,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                     modifier = Modifier
@@ -427,9 +457,8 @@ fun AddEditVehicleSheet(
             OutlinedTextField(
                 value = modelInput,
                 onValueChange = { if (it.length <= 120) modelInput = it },
-                label = { Text("Model *") },
+                label = { Text("Model") },
                 placeholder = { Text("RX 350") },
-                isError = attemptedSubmit && !modelValid,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                 modifier = Modifier
@@ -440,7 +469,7 @@ fun AddEditVehicleSheet(
             OutlinedTextField(
                 value = titleInput,
                 onValueChange = { if (it.length <= 200) titleInput = it },
-                label = { Text("Listing Title (auto-filled if blank)") },
+                label = { Text("Listing Title") },
                 placeholder = { Text("2024 Lexus RX 350 F Sport") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
@@ -460,7 +489,7 @@ fun AddEditVehicleSheet(
                         val digits = next.filter(Char::isDigit)
                         if (digits.length <= 9) priceInput = digits
                     },
-                    label = { Text("Price *") },
+                    label = { Text("Price") },
                     prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
                     isError = attemptedSubmit && !priceValid,
                     singleLine = true,
@@ -525,6 +554,7 @@ fun AddEditVehicleSheet(
                     value = transmissionInput,
                     onValueChange = { if (it.length <= 80) transmissionInput = it },
                     label = { Text("Transmission") },
+                    placeholder = { Text("Automatic") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -532,6 +562,7 @@ fun AddEditVehicleSheet(
                     value = fuelTypeInput,
                     onValueChange = { if (it.length <= 80) fuelTypeInput = it },
                     label = { Text("Fuel Type") },
+                    placeholder = { Text("Petrol") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -603,7 +634,7 @@ fun AddEditVehicleSheet(
             OutlinedTextField(
                 value = descriptionInput,
                 onValueChange = { if (it.length <= 4000) descriptionInput = it },
-                label = { Text("Description (auto-generated if blank)") },
+                label = { Text("Description") },
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier
@@ -614,7 +645,7 @@ fun AddEditVehicleSheet(
             OutlinedTextField(
                 value = tiktokUrlInput,
                 onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
-                label = { Text("TikTok Video URL (optional)") },
+                label = { Text("TikTok Video URL") },
                 placeholder = { Text("https://www.tiktok.com/…") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -623,7 +654,7 @@ fun AddEditVehicleSheet(
 
             if (attemptedSubmit && !formValid) {
                 Text(
-                    text = "Please provide a valid Year (1950–2100), Make, Model, and Price.",
+                    text = "If entered, Year must be between 1950 and 2100 and Price must be valid.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -648,37 +679,30 @@ fun AddEditVehicleSheet(
                 Button(
                     onClick = {
                         attemptedSubmit = true
-                        if (formValid && parsedYear != null && parsedPrice != null) {
-                            isProcessingPhoto = true
-                            scope.launch {
-                                val resolvedImageUrl = imageUrlInput.trim().ifEmpty {
-                                    withContext(Dispatchers.IO) {
-                                        encodeDrawableAsDataUrl(context, selectedPreset.studioDrawableRes())
-                                    } ?: "https://alifcarimport.com/placeholder.jpg"
-                                }
-                                isProcessingPhoto = false
-                                onSubmit(
-                                    VehicleDraft(
-                                        title = titleInput.trim(),
-                                        make = makeInput.trim(),
-                                        model = modelInput.trim(),
-                                        year = parsedYear,
-                                        price = parsedPrice,
-                                        originalPrice = parsedOriginalPrice,
-                                        mileage = mileageInput.trim(),
-                                        transmission = transmissionInput.trim(),
-                                        fuelType = fuelTypeInput.trim(),
-                                        color = colorInput.trim(),
-                                        origin = originInput.trim(),
-                                        imageUrl = resolvedImageUrl,
-                                        galleryImages = galleryImagesInput,
-                                        description = descriptionInput.trim(),
-                                        tiktokUrl = tiktokUrlInput.trim(),
-                                        status = selectedStatus,
-                                        featured = featured
-                                    )
+                        if (formValid) {
+                            val resolvedImageUrl = imageUrlInput.trim()
+                                .ifEmpty { "https://alifcarimport.com/placeholder.jpg" }
+                            onSubmit(
+                                VehicleDraft(
+                                    title = titleInput.trim(),
+                                    make = makeInput.trim(),
+                                    model = modelInput.trim(),
+                                    year = resolvedYear,
+                                    price = resolvedPrice,
+                                    originalPrice = parsedOriginalPrice,
+                                    mileage = mileageInput.trim(),
+                                    transmission = transmissionInput.trim(),
+                                    fuelType = fuelTypeInput.trim(),
+                                    color = colorInput.trim(),
+                                    origin = originInput.trim(),
+                                    imageUrl = resolvedImageUrl,
+                                    galleryImages = galleryImagesInput,
+                                    description = descriptionInput.trim(),
+                                    tiktokUrl = tiktokUrlInput.trim(),
+                                    status = selectedStatus,
+                                    featured = featured
                                 )
-                            }
+                            )
                         }
                     },
                     enabled = !isSaving && !isProcessingPhoto,

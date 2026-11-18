@@ -216,19 +216,34 @@ fun VehicleDetailPane(
                 },
                 label = "detail_hero_photo"
             ) { photoUrl ->
-                val detailImageRequest = remember(vehicle.id, photoUrl) {
-                    ImageRequest.Builder(context)
-                        .data(decodeImageModel(photoUrl))
-                        .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
-                        .crossfade(180)
-                        .build()
+                val decodedModel = remember(photoUrl) { decodeImageModel(photoUrl) }
+                if (decodedModel != null) {
+                    val detailImageRequest = remember(vehicle.id, photoUrl, decodedModel) {
+                        ImageRequest.Builder(context)
+                            .data(decodedModel)
+                            .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
+                            .crossfade(180)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = detailImageRequest,
+                        contentDescription = vehicle.displayTitle,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = vehicle.displayTitle,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(56.dp)
+                        )
+                    }
                 }
-                AsyncImage(
-                    model = detailImageRequest,
-                    contentDescription = vehicle.displayTitle,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
             }
             Surface(
                 color = statusColors.background,

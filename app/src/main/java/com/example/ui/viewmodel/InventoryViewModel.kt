@@ -10,6 +10,7 @@ import com.example.data.model.VehicleStatus
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface InventoryUiState {
     data object Loading : InventoryUiState
@@ -219,23 +221,47 @@ class InventoryViewModel(
 
     fun submitVehicleForm(editingVehicleId: String?, draft: VehicleDraft) {
         if (_isMutating.value) return
+        val summaryName = draft.title.ifBlank {
+            listOf(draft.make, draft.model).filter { it.isNotBlank() }.joinToString(" ")
+        }.ifBlank { "vehicle" }
+
         viewModelScope.launch {
             _isMutating.value = true
-            val result = if (editingVehicleId == null) {
-                repository.addVehicle(draft).map { }
-            } else {
-                repository.updateVehicle(editingVehicleId, draft)
+            val writeDeferred = async {
+                if (editingVehicleId == null) {
+                    repository.addVehicle(draft).map { }
+                } else {
+                    repository.updateVehicle(editingVehicleId, draft)
+                }
+            }
+            val fastResult = withTimeoutOrNull(FAST_PUBLISH_GRACE_MILLIS) {
+                writeDeferred.await()
             }
             _isMutating.value = false
-            result.onSuccess {
+
+            if (fastResult != null) {
+                fastResult.onSuccess {
+                    _formSheetState.value = null
+                    _snackbarMessage.value = if (editingVehicleId == null) {
+                        "Published $summaryName"
+                    } else {
+                        "Saved changes to $summaryName"
+                    }
+                }.onFailure { err ->
+                    _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
+                }
+            } else {
                 _formSheetState.value = null
                 _snackbarMessage.value = if (editingVehicleId == null) {
-                    "Published ${draft.year} ${draft.make} ${draft.model}"
+                    "Posted $summaryName — syncing to website"
                 } else {
-                    "Saved changes to ${draft.year} ${draft.make} ${draft.model}"
+                    "Saved $summaryName — syncing to website"
                 }
-            }.onFailure { err ->
-                _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
+                launch {
+                    writeDeferred.await().onFailure { err ->
+                        _snackbarMessage.value = err.localizedMessage ?: "Sync error while saving $summaryName"
+                    }
+                }
             }
         }
     }
@@ -319,6 +345,7 @@ class InventoryViewModel(
     private companion object {
         const val TAG = "InventoryVM"
         const val STOP_TIMEOUT_MILLIS = 5000L
+        const val FAST_PUBLISH_GRACE_MILLIS = 600L
     }
 }
 

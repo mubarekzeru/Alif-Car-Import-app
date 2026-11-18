@@ -138,4 +138,59 @@ class ExampleUnitTest {
         )
         assertEquals(listOf("user@example.com", "admin@site.com"), normalized)
     }
+
+    @Test
+    fun vehicleDraftWithBlankFields_producesValidFirestoreSchema() {
+        val blankDraft = VehicleDraft(
+            title = "",
+            make = "",
+            model = "",
+            year = 2024L,
+            price = 0L,
+            imageUrl = "data:image/jpeg;base64,/9j/4AAQ",
+            transmission = "",
+            fuelType = "",
+            mileage = "",
+            origin = "",
+            color = "",
+            description = ""
+        )
+
+        val map = blankDraft.toCreateMap("veh_blank_test_123", "2026-11-17T10:00:00.000Z")
+        assertEquals("New Vehicle Arrival", map["title"])
+        assertEquals("Vehicle", map["make"])
+        assertEquals("Import", map["model"])
+        assertEquals("New Vehicle Arrival", map["description"])
+        assertEquals(2024L, map["year"])
+        assertEquals(0L, map["price"])
+    }
+
+    @Test
+    fun securityLockHelper_enforcesExact24HourUnlockWindow() {
+        val loginAt = 1_700_000_000_000L
+        val after12Hours = loginAt + (12L * 60L * 60L * 1000L)
+        val after24Hours = loginAt + com.example.data.model.SecurityLockHelper.TWENTY_FOUR_HOURS_MILLIS
+
+        assertFalse(com.example.data.model.SecurityLockHelper.isUnlockedAfter24Hours(loginAt, after12Hours))
+        assertTrue(com.example.data.model.SecurityLockHelper.isUnlockedAfter24Hours(loginAt, after24Hours))
+        assertEquals(
+            "12h 0m remaining",
+            com.example.data.model.SecurityLockHelper.formatUnlockCountdown(
+                com.example.data.model.SecurityLockHelper.remainingLockMillis(loginAt, after12Hours)
+            )
+        )
+        assertEquals(
+            "Unlocked",
+            com.example.data.model.SecurityLockHelper.formatUnlockCountdown(
+                com.example.data.model.SecurityLockHelper.remainingLockMillis(loginAt, after24Hours)
+            )
+        )
+    }
+
+    @Test
+    fun decodeImageModel_returnsNullForBlankOrPlaceholderWithoutTemplateFallback() {
+        assertEquals(null, com.example.ui.components.decodeImageModel(""))
+        assertEquals(null, com.example.ui.components.decodeImageModel("https://alifcarimport.com/placeholder.jpg"))
+        assertEquals("https://example.com/car.jpg", com.example.ui.components.decodeImageModel("https://example.com/car.jpg"))
+    }
 }

@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -69,7 +70,10 @@ import com.example.auth.AuthScreen
 import com.example.auth.isUserVerified
 import com.example.auth.signOut
 import com.example.data.firebase.PortalRepository
+import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.firebase.VehicleRepository
+import com.example.ui.components.NotificationCenterTab
+import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.VehicleDetailScreen
 import com.example.ui.theme.LotPulseTheme
@@ -84,6 +88,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 
@@ -97,17 +102,41 @@ private enum class AppRootStage {
 }
 
 class MainActivity : ComponentActivity() {
+    private val pendingNotificationTab = MutableStateFlow<NotificationCenterTab?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SecurityNotificationHelper.ensureChannels(this)
+        handleNotificationIntent(intent)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         setContent {
+            val requestedTab by pendingNotificationTab.collectAsStateWithLifecycle()
             LotPulseTheme {
-                LotPulseApp()
+                LotPulseApp(
+                    requestedNotificationTab = requestedTab,
+                    onConsumeNotificationTab = { pendingNotificationTab.value = null }
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        val rawTab = intent?.getStringExtra(SecurityNotificationHelper.EXTRA_OPEN_NOTIFICATIONS_TAB)
+            ?: return
+        pendingNotificationTab.value = when (rawTab) {
+            SecurityNotificationHelper.TAB_INQUIRIES -> NotificationCenterTab.INQUIRIES
+            else -> NotificationCenterTab.LOGIN_ALERTS
+        }
+        intent.removeExtra(SecurityNotificationHelper.EXTRA_OPEN_NOTIFICATIONS_TAB)
     }
 }
 
@@ -127,7 +156,11 @@ private fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 @Composable
-fun LotPulseApp(auth: FirebaseAuth = Firebase.auth) {
+fun LotPulseApp(
+    auth: FirebaseAuth = Firebase.auth,
+    requestedNotificationTab: NotificationCenterTab? = null,
+    onConsumeNotificationTab: () -> Unit = {}
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var authRefreshTick by remember { mutableIntStateOf(0) }
     var showLaunchSplash by remember { mutableStateOf(true) }
@@ -165,8 +198,9 @@ fun LotPulseApp(auth: FirebaseAuth = Firebase.auth) {
                 if (activeUser != null) {
                     key(activeUser.uid) {
                         AuthenticatedLotAdmin(
-                            currentUserId = activeUser.uid,
-                            userEmail = activeUser.email
+                            activeUser = activeUser,
+                            requestedNotificationTab = requestedNotificationTab,
+                            onConsumeNotificationTab = onConsumeNotificationTab
                         )
                     }
                 }
@@ -258,13 +292,15 @@ private fun BrandLaunchSplash() {
 
 @Composable
 private fun AuthenticatedLotAdmin(
-    currentUserId: String,
-    userEmail: String?
+    activeUser: FirebaseUser,
+    requestedNotificationTab: NotificationCenterTab?,
+    onConsumeNotificationTab: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val navController = rememberNavController()
+    val currentUserId = activeUser.uid
 
     val viewModel: InventoryViewModel = viewModel(
         key = currentUserId,
@@ -292,11 +328,31 @@ private fun AuthenticatedLotAdmin(
                 val databaseId = app.getString(R.string.firestore_database_id)
                 val db = FirebaseFirestore.getInstance(databaseId)
                 PortalViewModel(
-                    repository = PortalRepository(db)
+                    appContext = app.applicationContext,
+                    repository = PortalRepository(db),
+                    securityRepository = SecuritySessionRepository(app.applicationContext, db)
                 )
             }
         }
     )
+
+    LaunchedEffect(activeUser.uid) {
+        portalViewModel.registerAuthenticatedSession(activeUser)
+    }
+
+    LaunchedEffect(requestedNotificationTab) {
+        if (requestedNotificationTab != null) {
+            portalViewModel.openNotifications(requestedNotificationTab)
+            onConsumeNotificationTab()
+        }
+    }
+
+    val isSessionRevoked by portalViewModel.isCurrentSessionRevoked.collectAsStateWithLifecycle()
+    LaunchedEffect(isSessionRevoked) {
+        if (isSessionRevoked) {
+            signOut(credentialManager = credentialManager, scope = scope)
+        }
+    }
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -332,11 +388,12 @@ private fun AuthenticatedLotAdmin(
             DashboardScreen(
                 viewModel = viewModel,
                 portalViewModel = portalViewModel,
-                userEmail = userEmail,
+                userEmail = activeUser.email,
                 onOpenVehicleDetail = { vehicleId ->
                     navController.navigate("vehicle_detail/$vehicleId")
                 },
                 onSignOutClick = {
+                    portalViewModel.prepareSignOut()
                     signOut(credentialManager = credentialManager, scope = scope)
                 }
             )

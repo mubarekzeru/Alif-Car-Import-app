@@ -54,6 +54,12 @@ fun formatTimestamp(timestamp: Timestamp?, fallbackString: String = ""): String 
     return fallbackString.takeIf { it.isNotBlank() }?.take(10) ?: "Recently updated"
 }
 
+fun formatEpochMillis(millis: Long): String {
+    if (millis <= 0L) return "Just now"
+    val formatter = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
+    return formatter.format(java.util.Date(millis))
+}
+
 @DrawableRes
 fun StudioPreset.studioDrawableRes(): Int = when (this) {
     StudioPreset.SEDAN -> R.drawable.img_vehicle_sedan
@@ -62,8 +68,13 @@ fun StudioPreset.studioDrawableRes(): Int = when (this) {
     StudioPreset.COUPE -> R.drawable.img_vehicle_coupe
 }
 
-fun decodeImageModel(imageUrl: String?, fallbackPreset: StudioPreset = StudioPreset.SUV): Any {
+private const val PLACEHOLDER_IMAGE_URL = "https://alifcarimport.com/placeholder.jpg"
+
+fun decodeImageModel(imageUrl: String?): Any? {
     val trimmed = imageUrl?.trim().orEmpty()
+    if (trimmed.isEmpty() || trimmed.equals(PLACEHOLDER_IMAGE_URL, ignoreCase = true)) {
+        return null
+    }
     if (trimmed.startsWith("data:image", ignoreCase = true)) {
         val cacheKey = "${trimmed.length}:${trimmed.hashCode()}"
         decodedDataUrlCache.get(cacheKey)?.let { return it }
@@ -82,33 +93,85 @@ fun decodeImageModel(imageUrl: String?, fallbackPreset: StudioPreset = StudioPre
     ) {
         return trimmed
     }
-    return fallbackPreset.studioDrawableRes()
+    return null
 }
 
-fun Vehicle.resolveImageModel(): Any = decodeImageModel(imageUrl)
+fun Vehicle.resolveImageModel(): Any? = decodeImageModel(imageUrl)
 
-fun encodePickedPhotoAsDataUrl(context: Context, uri: Uri): String? {
+private val encodedDrawableCache = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+fun encodePickedPhotoAsDataUrl(
+    context: Context,
+    uri: Uri,
+    maxDimension: Int = 800,
+    targetMaxBytes: Int = 120_000
+): String? {
     return try {
-        val original = context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+        }
+        val sampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        val decodeOpts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        val sampled = context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOpts)
         } ?: return null
-        compressBitmapToDataUrl(original)
+        compressBitmapToDataUrl(
+            bitmap = sampled,
+            maxDimension = maxDimension.toFloat(),
+            targetMaxBytes = targetMaxBytes
+        )
     } catch (_: Exception) {
         null
     }
 }
+
+fun encodeGalleryPhotoAsDataUrl(context: Context, uri: Uri): String? =
+    encodePickedPhotoAsDataUrl(
+        context = context,
+        uri = uri,
+        maxDimension = 640,
+        targetMaxBytes = 55_000
+    )
 
 fun encodeDrawableAsDataUrl(context: Context, @DrawableRes resId: Int): String? {
+    encodedDrawableCache[resId]?.let { return it }
     return try {
-        val bitmap = BitmapFactory.decodeResource(context.resources, resId) ?: return null
-        compressBitmapToDataUrl(bitmap)
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = 2
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        val bitmap = BitmapFactory.decodeResource(context.resources, resId, opts)
+            ?: BitmapFactory.decodeResource(context.resources, resId)
+            ?: return null
+        compressBitmapToDataUrl(
+            bitmap = bitmap,
+            maxDimension = 640f,
+            targetMaxBytes = 55_000
+        )?.also { encodedDrawableCache[resId] = it }
     } catch (_: Exception) {
         null
     }
 }
 
-private fun compressBitmapToDataUrl(bitmap: Bitmap): String? {
-    val maxDimension = 960f
+private fun calculateInSampleSize(width: Int, height: Int, reqSize: Int): Int {
+    if (width <= 0 || height <= 0) return 1
+    var inSampleSize = 1
+    val largest = maxOf(width, height)
+    while (largest / (inSampleSize * 2) >= reqSize) {
+        inSampleSize *= 2
+    }
+    return inSampleSize
+}
+
+private fun compressBitmapToDataUrl(
+    bitmap: Bitmap,
+    maxDimension: Float = 800f,
+    targetMaxBytes: Int = 120_000
+): String? {
     val scale = minOf(maxDimension / bitmap.width, maxDimension / bitmap.height, 1f)
     val scaled = if (scale < 1f) {
         Bitmap.createScaledBitmap(
@@ -116,19 +179,24 @@ private fun compressBitmapToDataUrl(bitmap: Bitmap): String? {
             (bitmap.width * scale).toInt().coerceAtLeast(1),
             (bitmap.height * scale).toInt().coerceAtLeast(1),
             true
-        )
+        ).also {
+            if (it !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+        }
     } else {
         bitmap
     }
 
-    var quality = 80
+    var quality = 74
     var bytes: ByteArray
+    val out = ByteArrayOutputStream(targetMaxBytes)
     do {
-        val out = ByteArrayOutputStream()
+        out.reset()
         scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
         bytes = out.toByteArray()
-        quality -= 15
-    } while (bytes.size > 320_000 && quality >= 35)
+        quality -= 14
+    } while (bytes.size > targetMaxBytes && quality >= 32)
+
+    if (!scaled.isRecycled) scaled.recycle()
 
     val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
     val dataUrl = "data:image/jpeg;base64,$encoded"

@@ -35,13 +35,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkEmailRead
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -72,7 +68,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -89,9 +84,8 @@ import androidx.credentials.CredentialManager
 import coil.compose.AsyncImage
 import com.example.R
 
-private enum class AuthMethod {
-    CHOICE,
-    EMAIL_PASSWORD,
+private enum class AuthScreenMode {
+    SIGN_IN,
     VERIFY_EMAIL
 }
 
@@ -107,7 +101,7 @@ fun AuthScreen(
 
     var isCheckingSession by remember { mutableStateOf(true) }
     var isSigningIn by remember { mutableStateOf(false) }
-    var activeMethod by rememberSaveable { mutableStateOf(AuthMethod.CHOICE) }
+    var activeMode by rememberSaveable { mutableStateOf(AuthScreenMode.SIGN_IN) }
     var emailInput by rememberSaveable { mutableStateOf("") }
     var passwordInput by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -128,7 +122,7 @@ fun AuthScreen(
             onNeedsVerification = { email ->
                 isCheckingSession = false
                 pendingVerifyEmail = email
-                activeMethod = AuthMethod.VERIFY_EMAIL
+                activeMode = AuthScreenMode.VERIFY_EMAIL
             },
             onUnauthenticated = {
                 isCheckingSession = false
@@ -174,7 +168,7 @@ fun AuthScreen(
             onNeedsVerification = { email ->
                 isSigningIn = false
                 pendingVerifyEmail = email
-                activeMethod = AuthMethod.VERIFY_EMAIL
+                activeMode = AuthScreenMode.VERIFY_EMAIL
             },
             onAuthError = { msg ->
                 isSigningIn = false
@@ -284,28 +278,7 @@ fun AuthScreen(
                         textAlign = TextAlign.Center
                     )
 
-                    if (activeMethod == AuthMethod.CHOICE) {
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            AuthFeatureRow(
-                                icon = Icons.Default.DirectionsCar,
-                                text = "Quick vehicle intake synced straight to your /vehicles lot"
-                            )
-                            AuthFeatureRow(
-                                icon = Icons.Default.Speed,
-                                text = "One-tap price adjustments & availability status badges"
-                            )
-                            AuthFeatureRow(
-                                icon = Icons.Default.Sync,
-                                text = "Sign in with Google or Email & Password (alifcarimports@gmail.com)"
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(22.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
 
                     AnimatedVisibility(
                         visible = errorMessage != null,
@@ -352,149 +325,30 @@ fun AuthScreen(
                     }
 
                     AnimatedContent(
-                        targetState = activeMethod,
+                        targetState = activeMode,
                         transitionSpec = {
                             (fadeIn(tween(220, easing = FastOutSlowInEasing)) +
                                 expandVertically(spring(stiffness = Spring.StiffnessMediumLow)))
                                 .togetherWith(fadeOut(tween(150)))
                         },
-                        label = "auth_method_transition"
-                    ) { method ->
-                        when (method) {
-                            AuthMethod.CHOICE -> {
+                        label = "auth_mode_transition"
+                    ) { mode ->
+                        when (mode) {
+                            AuthScreenMode.SIGN_IN -> {
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    Button(
-                                        onClick = { triggerGoogleSignIn() },
-                                        enabled = !isSigningIn && !isCheckingSession,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(52.dp)
-                                            .testTag("google_sign_in_button"),
-                                        shape = MaterialTheme.shapes.medium,
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary,
-                                            contentColor = MaterialTheme.colorScheme.onPrimary
-                                        )
-                                    ) {
-                                        if (isSigningIn || isCheckingSession) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                color = MaterialTheme.colorScheme.onPrimary,
-                                                strokeWidth = 2.5.dp
-                                            )
-                                            Spacer(modifier = Modifier.width(12.dp))
-                                            Text(
-                                                text = if (isCheckingSession) {
-                                                    stringResource(R.string.auth_checking_session)
-                                                } else {
-                                                    "Signing in…"
-                                                },
-                                                style = MaterialTheme.typography.labelLarge
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.Lock,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Text(
-                                                text = stringResource(R.string.auth_sign_in_google),
-                                                style = MaterialTheme.typography.labelLarge,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        HorizontalDivider(
-                                            modifier = Modifier.weight(1f),
-                                            color = MaterialTheme.colorScheme.outlineVariant
-                                        )
-                                        Text(
-                                            text = "OR",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        HorizontalDivider(
-                                            modifier = Modifier.weight(1f),
-                                            color = MaterialTheme.colorScheme.outlineVariant
-                                        )
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = {
-                                            errorMessage = null
-                                            infoMessage = null
-                                            activeMethod = AuthMethod.EMAIL_PASSWORD
-                                        },
-                                        enabled = !isSigningIn && !isCheckingSession,
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                                        shape = MaterialTheme.shapes.medium,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(52.dp)
-                                            .testTag("email_sign_in_option_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Email,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = stringResource(R.string.auth_sign_in_email),
-                                            style = MaterialTheme.typography.labelLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                            }
-
-                            AuthMethod.EMAIL_PASSWORD -> {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        IconButton(
-                                            onClick = {
-                                                errorMessage = null
-                                                infoMessage = null
-                                                activeMethod = AuthMethod.CHOICE
-                                            },
-                                            modifier = Modifier.size(48.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                                contentDescription = "Back to sign-in options"
-                                            )
-                                        }
-                                        Text(
-                                            text = "Email & Password Sign-In",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-
                                     OutlinedTextField(
                                         value = emailInput,
                                         onValueChange = { emailInput = it },
-                                        label = { Text("Admin Email") },
-                                        placeholder = { Text("alifcarimports@gmail.com") },
+                                        label = { Text("Email") },
+                                        placeholder = { Text("Enter email") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Email, contentDescription = null)
+                                        },
                                         singleLine = true,
-                                        enabled = !isSigningIn,
+                                        enabled = !isSigningIn && !isCheckingSession,
                                         keyboardOptions = KeyboardOptions(
                                             keyboardType = KeyboardType.Email,
                                             imeAction = ImeAction.Next
@@ -511,8 +365,12 @@ fun AuthScreen(
                                         value = passwordInput,
                                         onValueChange = { passwordInput = it },
                                         label = { Text("Password") },
+                                        placeholder = { Text("Enter password") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Lock, contentDescription = null)
+                                        },
                                         singleLine = true,
-                                        enabled = !isSigningIn,
+                                        enabled = !isSigningIn && !isCheckingSession,
                                         visualTransformation = if (passwordVisible) {
                                             VisualTransformation.None
                                         } else {
@@ -541,7 +399,7 @@ fun AuthScreen(
                                             imeAction = ImeAction.Done
                                         ),
                                         keyboardActions = KeyboardActions(
-                                            onDone = { if (!isSigningIn) triggerEmailSignIn() }
+                                            onDone = { if (!isSigningIn && !isCheckingSession) triggerEmailSignIn() }
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -563,7 +421,7 @@ fun AuthScreen(
                                                     scope = scope
                                                 )
                                             },
-                                            enabled = !isSigningIn
+                                            enabled = !isSigningIn && !isCheckingSession
                                         ) {
                                             Text("Forgot password?")
                                         }
@@ -571,7 +429,7 @@ fun AuthScreen(
 
                                     Button(
                                         onClick = { triggerEmailSignIn() },
-                                        enabled = !isSigningIn,
+                                        enabled = !isSigningIn && !isCheckingSession,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(52.dp)
@@ -582,21 +440,22 @@ fun AuthScreen(
                                             contentColor = MaterialTheme.colorScheme.onPrimary
                                         )
                                     ) {
-                                        if (isSigningIn) {
+                                        if (isSigningIn || isCheckingSession) {
                                             CircularProgressIndicator(
                                                 modifier = Modifier.size(20.dp),
                                                 color = MaterialTheme.colorScheme.onPrimary,
                                                 strokeWidth = 2.5.dp
                                             )
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Text("Signing in…")
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.Email,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp)
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = if (isCheckingSession) {
+                                                    stringResource(R.string.auth_checking_session)
+                                                } else {
+                                                    "Signing in…"
+                                                },
+                                                style = MaterialTheme.typography.labelLarge
                                             )
-                                            Spacer(modifier = Modifier.width(10.dp))
+                                        } else {
                                             Text(
                                                 text = "Sign In",
                                                 style = MaterialTheme.typography.labelLarge,
@@ -605,25 +464,48 @@ fun AuthScreen(
                                         }
                                     }
 
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        HorizontalDivider(
+                                            modifier = Modifier.weight(1f),
+                                            color = MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                        Text(
+                                            text = "OR",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        HorizontalDivider(
+                                            modifier = Modifier.weight(1f),
+                                            color = MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                    }
+
                                     OutlinedButton(
                                         onClick = { triggerGoogleSignIn() },
-                                        enabled = !isSigningIn,
+                                        enabled = !isSigningIn && !isCheckingSession,
                                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                                         shape = MaterialTheme.shapes.medium,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(48.dp)
+                                            .height(52.dp)
                                             .testTag("google_sign_in_button")
                                     ) {
                                         Text(
                                             text = stringResource(R.string.auth_sign_in_google),
-                                            fontWeight = FontWeight.SemiBold
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
                             }
 
-                            AuthMethod.VERIFY_EMAIL -> {
+                            AuthScreenMode.VERIFY_EMAIL -> {
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -701,12 +583,12 @@ fun AuthScreen(
                                                 credentialManager = credentialManager,
                                                 scope = scope,
                                                 onSignOutComplete = {
-                                                    activeMethod = AuthMethod.CHOICE
+                                                    activeMode = AuthScreenMode.SIGN_IN
                                                 }
                                             )
                                         }
                                     ) {
-                                        Text("Choose another sign-in option")
+                                        Text("Back to sign-in")
                                     }
                                 }
                             }
@@ -715,33 +597,5 @@ fun AuthScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun AuthFeatureRow(
-    icon: ImageVector,
-    text: String
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface
-        )
     }
 }

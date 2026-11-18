@@ -1,14 +1,22 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.firebase.AdminAccessState
 import com.example.data.firebase.InquiriesState
 import com.example.data.firebase.PortalRepository
+import com.example.data.firebase.SecuritySessionRepository
+import com.example.data.model.ActiveDeviceSession
+import com.example.data.model.LoginAlertDecision
+import com.example.data.model.LoginSecurityAlert
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
+import com.example.ui.components.NotificationCenterTab
+import com.example.ui.notifications.SecurityNotificationHelper
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,32 +24,66 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class DashboardSection(val label: String) {
+    INVENTORY("Inventory"),
+    TIKTOK_VIDEOS("TikTok Videos")
+}
+
 enum class ActivePortalSheet {
     NONE,
+    SETTINGS,
+    NOTIFICATIONS,
     SHOWROOM,
-    TIKTOK_POSTS,
-    INQUIRIES,
     ADMIN_ACCESS
 }
 
+sealed interface TikTokFormMode {
+    data object Add : TikTokFormMode
+    data class Edit(val post: TikTokPost) : TikTokFormMode
+}
+
 class PortalViewModel(
-    private val repository: PortalRepository
+    private val appContext: Context,
+    private val repository: PortalRepository,
+    private val securityRepository: SecuritySessionRepository
 ) : ViewModel() {
+
+    private val _dashboardSection = MutableStateFlow(DashboardSection.INVENTORY)
+    val dashboardSection: StateFlow<DashboardSection> = _dashboardSection.asStateFlow()
 
     private val _activeSheet = MutableStateFlow(ActivePortalSheet.NONE)
     val activeSheet: StateFlow<ActivePortalSheet> = _activeSheet.asStateFlow()
 
+    private val _notificationTab = MutableStateFlow(NotificationCenterTab.LOGIN_ALERTS)
+    val notificationTab: StateFlow<NotificationCenterTab> = _notificationTab.asStateFlow()
+
+    private val _tikTokFormMode = MutableStateFlow<TikTokFormMode?>(null)
+    val tikTokFormMode: StateFlow<TikTokFormMode?> = _tikTokFormMode.asStateFlow()
+
+    private val _deleteTikTokCandidate = MutableStateFlow<TikTokPost?>(null)
+    val deleteTikTokCandidate: StateFlow<TikTokPost?> = _deleteTikTokCandidate.asStateFlow()
+
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
+
+    private val _isChangingPassword = MutableStateFlow(false)
+    val isChangingPassword: StateFlow<Boolean> = _isChangingPassword.asStateFlow()
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
     val isBootstrapOwner: Boolean
         get() = repository.isBootstrapOwner()
+
+    val sessions: StateFlow<List<ActiveDeviceSession>> = securityRepository.sessions
+    val loginAlerts: StateFlow<List<LoginSecurityAlert>> = securityRepository.alerts
+    val currentLoginAtMillis: StateFlow<Long> = securityRepository.currentLoginAtMillis
+    val isCurrentSessionRevoked: StateFlow<Boolean> = securityRepository.isCurrentSessionRevoked
 
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
@@ -74,6 +116,11 @@ class PortalViewModel(
         )
 
     val inquiriesState: StateFlow<InquiriesState> = repository.observeInquiries()
+        .onEach { state ->
+            if (state is InquiriesState.Success) {
+                SecurityNotificationHelper.showNewInquiriesIfNeeded(appContext, state.inquiries)
+            }
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
@@ -87,12 +134,109 @@ class PortalViewModel(
             initialValue = AdminAccessState.Loading
         )
 
+    init {
+        inquiriesState.launchIn(viewModelScope)
+    }
+
+    fun registerAuthenticatedSession(user: FirebaseUser) {
+        securityRepository.startObservingCloudSecurity(
+            uid = user.uid,
+            onNewAlert = { alert ->
+                SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
+            }
+        )
+        viewModelScope.launch {
+            securityRepository.registerCurrentDeviceSignIn(user) { alert ->
+                SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        securityRepository.stopObservingCloudSecurity()
+    }
+
+    fun selectDashboardSection(section: DashboardSection) {
+        _dashboardSection.value = section
+    }
+
     fun openSheet(sheet: ActivePortalSheet) {
         _activeSheet.value = sheet
     }
 
+    fun openNotifications(tab: NotificationCenterTab = _notificationTab.value) {
+        _notificationTab.value = tab
+        _activeSheet.value = ActivePortalSheet.NOTIFICATIONS
+    }
+
+    fun selectNotificationTab(tab: NotificationCenterTab) {
+        _notificationTab.value = tab
+    }
+
     fun dismissSheet() {
         _activeSheet.value = ActivePortalSheet.NONE
+    }
+
+    fun openAddTikTokForm() {
+        _tikTokFormMode.value = TikTokFormMode.Add
+    }
+
+    fun openEditTikTokForm(post: TikTokPost) {
+        _tikTokFormMode.value = TikTokFormMode.Edit(post)
+    }
+
+    fun dismissTikTokForm() {
+        _tikTokFormMode.value = null
+    }
+
+    fun requestDeleteTikTokPost(post: TikTokPost) {
+        _deleteTikTokCandidate.value = post
+    }
+
+    fun dismissDeleteTikTokDialog() {
+        _deleteTikTokCandidate.value = null
+    }
+
+    fun confirmLoginAlertIsMe(alertId: String) {
+        securityRepository.confirmAlertIsMe(alertId)
+        _snackbarMessage.value = "Confirmed login — session stays active"
+    }
+
+    fun rejectLoginAlertNotMe(alertId: String) {
+        securityRepository.rejectAlertNotMe(alertId)
+        _snackbarMessage.value = "Unrecognized session logged out immediately"
+    }
+
+    fun deactivateOtherDevice(sessionId: String): Result<Unit> {
+        val result = securityRepository.deactivateOtherSession(sessionId)
+        result.onSuccess {
+            _snackbarMessage.value = "Removed active device session"
+        }
+        return result
+    }
+
+    fun changePassword(
+        oldPassword: String,
+        newPassword: String,
+        confirmPassword: String,
+        onComplete: (Result<String>) -> Unit
+    ) {
+        if (_isChangingPassword.value) return
+        viewModelScope.launch {
+            _isChangingPassword.value = true
+            val result = securityRepository.changePasswordWith24hGuard(
+                oldPassword = oldPassword,
+                newPassword = newPassword,
+                confirmPassword = confirmPassword
+            )
+            _isChangingPassword.value = false
+            onComplete(result)
+        }
+    }
+
+    fun prepareSignOut() {
+        securityRepository.markCurrentSessionSignedOut()
     }
 
     fun consumeSnackbar() {
@@ -114,7 +258,7 @@ class PortalViewModel(
         }
     }
 
-    fun saveTikTokPost(editingPostId: String?, draft: TikTokPostDraft, onSuccess: () -> Unit = {}) {
+    fun saveTikTokPost(editingPostId: String?, draft: TikTokPostDraft) {
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
@@ -125,28 +269,30 @@ class PortalViewModel(
             }
             _isMutating.value = false
             result.onSuccess {
-                onSuccess()
+                _tikTokFormMode.value = null
                 _snackbarMessage.value = if (editingPostId == null) {
-                    "Published TikTok post to website"
+                    "Published TikTok video link to website"
                 } else {
-                    "Updated TikTok post"
+                    "Updated TikTok video link"
                 }
             }.onFailure { err ->
-                _snackbarMessage.value = err.localizedMessage ?: "Failed to save TikTok post"
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to save TikTok video link"
             }
         }
     }
 
-    fun deleteTikTokPost(post: TikTokPost) {
+    fun confirmDeleteTikTokPost() {
+        val candidate = _deleteTikTokCandidate.value ?: return
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
-            val result = repository.deleteTikTokPost(post.id)
+            val result = repository.deleteTikTokPost(candidate.id)
             _isMutating.value = false
+            _deleteTikTokCandidate.value = null
             result.onSuccess {
-                _snackbarMessage.value = "Removed TikTok post"
+                _snackbarMessage.value = "Removed TikTok video link"
             }.onFailure { err ->
-                _snackbarMessage.value = err.localizedMessage ?: "Failed to delete TikTok post"
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to delete TikTok video link"
             }
         }
     }
@@ -164,6 +310,9 @@ class PortalViewModel(
             }
         }
     }
+
+    fun pendingAlertsCount(alerts: List<LoginSecurityAlert>): Int =
+        alerts.count { it.decision == LoginAlertDecision.PENDING }
 
     private companion object {
         const val TAG = "PortalVM"

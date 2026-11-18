@@ -81,13 +81,39 @@ data class VehicleDraft(
     val status: VehicleStatus = VehicleStatus.AVAILABLE,
     val featured: Boolean = false
 ) {
+    private val resolvedMake: String
+        get() {
+            val trimmed = make.trim()
+            if (trimmed.isNotEmpty()) return trimmed.take(80)
+            val titleTokens = title.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val withoutYear = titleTokens.dropWhile { it.length == 4 && it.all(Char::isDigit) }
+            return (withoutYear.firstOrNull() ?: "Vehicle").take(80)
+        }
+
+    private val resolvedModel: String
+        get() {
+            val trimmed = model.trim()
+            if (trimmed.isNotEmpty()) return trimmed.take(120)
+            val titleTokens = title.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val withoutYear = titleTokens.dropWhile { it.length == 4 && it.all(Char::isDigit) }
+            val remainder = if (make.trim().isEmpty()) withoutYear.drop(1) else withoutYear
+            return remainder.joinToString(" ").ifBlank { "Import" }.take(120)
+        }
+
     private val resolvedTitle: String
-        get() = title.trim().ifEmpty { "$year ${make.trim()} ${model.trim()}" }.take(200)
+        get() = title.trim().ifEmpty {
+            val yearVal = year.coerceIn(1950L, 2100L)
+            if (make.trim().isEmpty() && model.trim().isEmpty()) {
+                "New Vehicle Arrival"
+            } else {
+                "$yearVal $resolvedMake $resolvedModel"
+            }
+        }.take(200)
 
     private val resolvedDescription: String
         get() = description.trim().ifEmpty {
             buildString {
-                append("$year ${make.trim()} ${model.trim()}")
+                append(resolvedTitle)
                 val specs = listOf(transmission.trim(), fuelType.trim(), origin.trim())
                     .filter { it.isNotEmpty() }
                 if (specs.isNotEmpty()) {
@@ -101,8 +127,8 @@ data class VehicleDraft(
         val raw = mutableMapOf<String, Any>(
             "id" to vehicleId,
             "title" to resolvedTitle,
-            "make" to make.trim().take(80),
-            "model" to model.trim().take(120),
+            "make" to resolvedMake,
+            "model" to resolvedModel,
             "year" to year.coerceIn(1950L, 2100L),
             "price" to price.coerceIn(0L, 100_000_000L),
             "mileage" to mileage.trim().take(60),
@@ -132,8 +158,8 @@ data class VehicleDraft(
         val cleanGallery = galleryImages.map { it.trim() }.filter { it.isNotEmpty() && it.length <= 550_000 }.take(10)
         return mapOf(
             "title" to resolvedTitle,
-            "make" to make.trim().take(80),
-            "model" to model.trim().take(120),
+            "make" to resolvedMake,
+            "model" to resolvedModel,
             "year" to year.coerceIn(1950L, 2100L),
             "price" to price.coerceIn(0L, 100_000_000L),
             "originalPrice" to (originalPrice?.takeIf { it in 0L..100_000_000L } ?: FieldValue.delete()),

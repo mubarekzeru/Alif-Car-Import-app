@@ -35,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -104,20 +105,8 @@ fun VehicleInventoryCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            val context = LocalContext.current
-            val dataModel = remember(vehicle.id, vehicle.imageUrl) {
-                vehicle.resolveImageModel()
-            }
-            val imageRequest = remember(vehicle.id, dataModel) {
-                dataModel?.let {
-                    ImageRequest.Builder(context)
-                        .data(it)
-                        .memoryCacheKey("veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
-                        .size(640, 420)
-                        .crossfade(180)
-                        .allowHardware(true)
-                        .build()
-                }
+            val photoCandidates = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
+                vehicle.allResolvedPhotoUrls()
             }
 
             // Rounded photo showcase matching Screenshot 1 card design
@@ -129,14 +118,16 @@ fun VehicleInventoryCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageRequest != null) {
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = vehicle.displayTitle,
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+                ResilientAppImage(
+                    candidateUrls = photoCandidates,
+                    contentDescription = vehicle.displayTitle,
+                    cacheKeyPrefix = "veh_${vehicle.id}",
+                    width = 640,
+                    height = 420,
+                    crossfadeMillis = 180,
+                    modifier = Modifier.matchParentSize(),
+                    contentScale = ContentScale.Crop
+                ) {
                     Icon(
                         imageVector = Icons.Default.DirectionsCar,
                         contentDescription = vehicle.displayTitle,

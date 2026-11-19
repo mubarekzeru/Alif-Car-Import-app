@@ -214,12 +214,124 @@ class VehicleRepository(
     }
 }
 
+private val JSON_STRING_ARRAY_ITEM_REGEX = Regex(""""((?:[^"\\]|\\.)+)"""")
+private val IMAGE_VALUE_HINT_REGEX = Regex(
+    """^(?:data:image/|https?://|gs://|/|./)|(?:uploads/|images/|cars/|alifcarimport/)|\.(?:jpe?g|png|webp|gif|avif|bmp)(?:[?#].*)?$""",
+    RegexOption.IGNORE_CASE
+)
+private val NON_IMAGE_FIELDS = setOf(
+    "id", "title", "make", "brand", "model", "year", "price", "originalPrice",
+    "mileage", "transmission", "fuelType", "fuel", "color", "exteriorColor",
+    "origin", "description", "tiktokUrl", "tiktok", "videoUrl", "status",
+    "featured", "createdAt", "updatedAt"
+)
+
+private fun extractImageUrls(raw: Any?): List<String> = when (raw) {
+    is String -> {
+        val trimmed = raw.trim()
+        when {
+            trimmed.isEmpty() -> emptyList()
+            trimmed.startsWith("data:", ignoreCase = true) -> listOf(trimmed)
+            trimmed.startsWith("[") && trimmed.endsWith("]") -> {
+                JSON_STRING_ARRAY_ITEM_REGEX.findAll(trimmed)
+                    .map { it.groupValues[1].replace("\\/", "/").trim() }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+            }
+            trimmed.contains('\n') -> {
+                trimmed.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            }
+            else -> listOf(trimmed)
+        }
+    }
+    is List<*> -> raw.flatMap { extractImageUrls(it) }
+    is Map<*, *> -> {
+        val candidateKeys = listOf(
+            "url", "URL", "imageUrl", "imageURL", "image_url",
+            "downloadURL", "downloadUrl", "download_url",
+            "src", "secure_url", "secureUrl", "uri", "href", "link",
+            "path", "image", "photo", "thumbnail", "thumbnailUrl",
+            "coverUrl", "preview", "data", "base64"
+        )
+        candidateKeys.firstNotNullOfOrNull { key ->
+            extractImageUrls(raw[key]).firstOrNull()
+        }?.let { listOf(it) } ?: emptyList()
+    }
+    else -> emptyList()
+}
+
+private fun String.isPlaceholderImageUrl(): Boolean {
+    val t = trim().lowercase(Locale.US)
+    return t.isEmpty() ||
+        t == "null" ||
+        t == "undefined" ||
+        t == "https://alifcarimport.com/placeholder.jpg" ||
+        t == "https://mubarekzeru.github.io/alifcarimport/placeholder.jpg" ||
+        t == "/placeholder.jpg" ||
+        t == "placeholder.jpg" ||
+        t.endsWith("/placeholder.jpg") ||
+        t.endsWith("/placeholder.png") ||
+        t.startsWith("blob:")
+}
+
+private fun String.looksLikeRawBase64Image(): Boolean {
+    val compact = replace("\\s+".toRegex(), "")
+    return compact.length >= 64 && (
+        compact.startsWith("/9j/") ||
+            compact.startsWith("iVBORw0KGgo") ||
+            compact.startsWith("UklGR") ||
+            compact.startsWith("R0lGOD")
+        )
+}
+
 private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
     val data = data ?: return null
     val docId = (data["id"] as? String)?.takeIf { it.isNotBlank() } ?: id
-    val gallery = ((data["galleryImages"] as? List<*>) ?: (data["images"] as? List<*>))
-        ?.mapNotNull { it as? String }
-        ?: emptyList()
+    val galleryKeys = listOf(
+        "galleryImages", "gallery", "galleryUrls", "images", "imageUrls",
+        "photos", "photoUrls", "pictures", "media", "additionalImages",
+        "extraImages", "files", "attachments"
+    )
+    val gallery = buildList {
+        galleryKeys.forEach { key ->
+            extractImageUrls(data[key]).forEach { url ->
+                if (!url.isPlaceholderImageUrl() && url !in this) add(url)
+            }
+        }
+    }.toMutableList()
+
+    val primaryKeys = listOf(
+        "imageUrl", "imageURL", "image_url", "image", "img", "imgUrl", "img_url",
+        "mainImage", "mainImageUrl", "primaryImage", "primaryImageUrl",
+        "featuredImage", "featuredImageUrl", "coverImage", "coverImageUrl",
+        "coverUrl", "cover", "thumbnailUrl", "thumbnail", "thumbUrl", "thumb",
+        "photoUrl", "photoURL", "photo_url", "photo", "pictureUrl", "picture",
+        "carImage", "carImageUrl", "vehicleImage", "vehicleImageUrl",
+        "heroImage", "imageSrc", "imageData", "imageBase64",
+        "photoData", "photoBase64", "dataUrl"
+    )
+    val primaryCandidates = primaryKeys.flatMap { extractImageUrls(data[it]) }
+
+    // Universal fallback scan in case the website admin stores image(s) under a custom key name
+    if (primaryCandidates.none { !it.isPlaceholderImageUrl() } && gallery.isEmpty()) {
+        data.forEach { (key, value) ->
+            if (key !in NON_IMAGE_FIELDS) {
+                extractImageUrls(value).forEach { candidate ->
+                    if (!candidate.isPlaceholderImageUrl() &&
+                        (IMAGE_VALUE_HINT_REGEX.containsMatchIn(candidate) || candidate.looksLikeRawBase64Image()) &&
+                        candidate !in gallery
+                    ) {
+                        gallery.add(candidate)
+                    }
+                }
+            }
+        }
+    }
+
+    val resolvedPrimaryImage = primaryCandidates.firstOrNull { !it.isPlaceholderImageUrl() }
+        ?: gallery.firstOrNull()
+        ?: primaryCandidates.firstOrNull().orEmpty()
+
     val rawMileage = data["mileage"]
     val mileageString = when (rawMileage) {
         is String -> rawMileage
@@ -276,7 +388,7 @@ private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
         fuelType = parsedFuelType,
         color = parsedColor,
         origin = (data["origin"] as? String).orEmpty(),
-        imageUrl = (data["imageUrl"] as? String).orEmpty(),
+        imageUrl = resolvedPrimaryImage,
         galleryImages = gallery,
         description = (data["description"] as? String).orEmpty(),
         tiktokUrl = (data["tiktokUrl"] as? String).orEmpty(),

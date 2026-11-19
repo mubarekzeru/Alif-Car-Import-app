@@ -2,10 +2,12 @@ package com.example
 
 import com.example.data.model.VehicleDraft
 import com.example.data.model.VehicleStatus
+import com.example.ui.components.allResolvedPhotoUrls
 import com.example.ui.components.formatCompactCurrency
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
 import com.example.ui.components.formatOptionalCurrency
+import com.example.ui.components.resolvedPhotoSlots
 import com.google.firebase.firestore.FieldValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -191,9 +193,95 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun decodeImageModel_returnsNullForBlankOrPlaceholderWithoutTemplateFallback() {
+    fun decodeImageModel_resolvesWebsiteUploadsNextImageAndFallbacks() {
         assertEquals(null, com.example.ui.components.decodeImageModel(""))
         assertEquals(null, com.example.ui.components.decodeImageModel("https://alifcarimport.com/placeholder.jpg"))
-        assertEquals("https://example.com/car.jpg", com.example.ui.components.decodeImageModel("https://example.com/car.jpg"))
+        assertEquals(null, com.example.ui.components.decodeImageModel("/placeholder.jpg"))
+        assertEquals(
+            "https://example.com/car.jpg",
+            com.example.ui.components.decodeImageModel("https://example.com/car.jpg")
+        )
+        assertEquals(
+            "https://alifcarimport.com/uploads/leopard5.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("/uploads/leopard5.jpg")
+        )
+        assertEquals(
+            "https://alifcarimport.com/uploads/Leopard%205.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("/uploads/Leopard 5.jpg")
+        )
+        assertEquals(
+            "https://alifcarimport.com/uploads/cars/byd.webp",
+            com.example.ui.components.normalizeWebsiteImageUrl("uploads/cars/byd.webp")
+        )
+        assertEquals(
+            "https://mubarekzeru.github.io/AlifCarImport/images/song-plus.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("./images/song-plus.jpg")
+        )
+        assertEquals(
+            "https://mubarekzeru.github.io/AlifCarImport/cars/bz3x.webp",
+            com.example.ui.components.normalizeWebsiteImageUrl("/AlifCarImport/cars/bz3x.webp")
+        )
+        assertTrue(
+            com.example.ui.components.resolveCandidateImageUrls("song-plus.jpg")
+                .contains("https://mubarekzeru.github.io/AlifCarImport/song-plus.jpg")
+        )
+        assertTrue(
+            com.example.ui.components.resolveCandidateImageUrls("https://alifcarimport.com/uploads/leopard5.jpg")
+                .contains("https://mubarekzeru.github.io/AlifCarImport/uploads/leopard5.jpg")
+        )
+        assertEquals(
+            "https://raw.githubusercontent.com/mubarekzeru/AlifCarImport/main/public/cars/leopard5.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl(
+                "https://github.com/mubarekzeru/AlifCarImport/blob/main/public/cars/leopard5.jpg"
+            )
+        )
+        val nextImageCandidates = com.example.ui.components.resolveCandidateImageUrls(
+            "/_next/image?url=%2Fuploads%2Fleopard5.jpg&amp;w=1080&amp;q=75"
+        )
+        assertEquals("https://alifcarimport.com/uploads/leopard5.jpg", nextImageCandidates.first())
+        assertTrue(nextImageCandidates.any { it.contains("/_next/image?url=%2Fuploads%2Fleopard5.jpg&w=1080&q=75") })
+
+        assertEquals(
+            "https://cdn.example.com/car.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl(
+                "https://alifcarimport.com/_next/image?url=https%3A%2F%2Fcdn.example.com%2Fcar.jpg&w=828&q=75"
+            )
+        )
+        assertEquals(
+            "https://alifcarimport.com/uploads/car.png",
+            com.example.ui.components.normalizeWebsiteImageUrl("//alifcarimport.com/uploads/car.png")
+        )
+        assertEquals(
+            "https://alifcarimport.com/uploads/car.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("http://alifcarimport.com/uploads/car.jpg")
+        )
+        assertEquals(
+            "https://firebasestorage.googleapis.com/v0/b/alif-bucket/o/vehicles%2Fcar.jpg?alt=media",
+            com.example.ui.components.normalizeWebsiteImageUrl("gs://alif-bucket/vehicles/car.jpg")
+        )
+        val driveCandidates = com.example.ui.components.resolveCandidateImageUrls(
+            "https://drive.google.com/file/d/ABC123xyz/view?usp=sharing"
+        )
+        assertEquals("https://drive.google.com/thumbnail?id=ABC123xyz&sz=w1200", driveCandidates.first())
+        assertTrue(driveCandidates.contains("https://drive.google.com/uc?export=view&id=ABC123xyz"))
+
+        val rawJpegBase64 = "/9j/" + "A".repeat(80)
+        assertTrue(
+            com.example.ui.components.normalizeWebsiteImageUrl(rawJpegBase64)
+                .orEmpty()
+                .startsWith("data:image/jpeg;base64,")
+        )
+
+        val vehicleWithGalleryOnly = com.example.data.model.Vehicle(
+            id = "veh_1",
+            imageUrl = "https://alifcarimport.com/placeholder.jpg",
+            galleryImages = listOf("/uploads/leopard-front.jpg", "/uploads/leopard-side.jpg")
+        )
+        val slots = vehicleWithGalleryOnly.resolvedPhotoSlots()
+        assertEquals(2, slots.size)
+        assertEquals("https://alifcarimport.com/uploads/leopard-front.jpg", slots[0].first())
+        assertTrue(slots[0].contains("https://mubarekzeru.github.io/AlifCarImport/uploads/leopard-front.jpg"))
+        assertEquals("https://alifcarimport.com/uploads/leopard-side.jpg", slots[1].first())
+        assertTrue(vehicleWithGalleryOnly.allResolvedPhotoUrls().contains("https://alifcarimport.com/uploads/leopard-front.jpg"))
     }
 }

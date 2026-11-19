@@ -76,6 +76,7 @@ import com.example.ui.components.AccountSettingsScreen
 import com.example.ui.components.AddEditTikTokScreen
 import com.example.ui.components.AddEditVehicleScreen
 import com.example.ui.components.AdminAccessScreen
+import com.example.ui.components.AppImageLoader
 import com.example.ui.components.BottomNavTab
 import com.example.ui.components.ContactSocialLocationScreen
 import com.example.ui.components.NotificationCenterTab
@@ -123,6 +124,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppImageLoader.install(applicationContext)
         SecurityNotificationHelper.ensureChannels(this)
         handleNotificationIntent(intent)
         enableEdgeToEdge(

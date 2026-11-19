@@ -77,16 +77,15 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
+import com.example.ui.components.ResilientAppImage
 import com.example.ui.components.colors
-import com.example.ui.components.decodeImageModel
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
 import com.example.ui.components.formatOptionalCurrency
 import com.example.ui.components.formatTimestamp
+import com.example.ui.components.resolvedPhotoSlots
 import com.example.ui.theme.JetBrainsMonoFontFamily
 
 @Composable
@@ -212,15 +211,11 @@ fun VehicleDetailPane(
     modifier: Modifier = Modifier
 ) {
     val statusColors = vehicle.statusEnum.colors()
-    val allPhotos = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
-        buildList {
-            if (vehicle.imageUrl.isNotBlank()) add(vehicle.imageUrl)
-            addAll(vehicle.galleryImages.filter { it.isNotBlank() && it != vehicle.imageUrl })
-        }
+    val photoSlots = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
+        vehicle.resolvedPhotoSlots()
     }
-    var selectedPhotoIndex by remember(vehicle.id, allPhotos.size) { mutableIntStateOf(0) }
-    val activePhotoUrl = allPhotos.getOrNull(selectedPhotoIndex) ?: vehicle.imageUrl
-    val context = LocalContext.current
+    var selectedPhotoIndex by remember(vehicle.id, photoSlots.size) { mutableIntStateOf(0) }
+    val activeSlotCandidates = photoSlots.getOrNull(selectedPhotoIndex).orEmpty()
 
     Column(modifier = modifier.fillMaxSize()) {
         Column(
@@ -251,28 +246,20 @@ fun VehicleDetailPane(
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                     ) {
                         AnimatedContent(
-                            targetState = activePhotoUrl,
+                            targetState = activeSlotCandidates,
                             transitionSpec = {
                                 fadeIn(tween(220)) togetherWith fadeOut(tween(150))
                             },
                             label = "detail_hero_photo"
-                        ) { photoUrl ->
-                            val decodedModel = remember(photoUrl) { decodeImageModel(photoUrl) }
-                            if (decodedModel != null) {
-                                val detailImageRequest = remember(vehicle.id, photoUrl, decodedModel) {
-                                    ImageRequest.Builder(context)
-                                        .data(decodedModel)
-                                        .memoryCacheKey("veh_detail_${vehicle.id}_${photoUrl.hashCode()}")
-                                        .crossfade(180)
-                                        .build()
-                                }
-                                AsyncImage(
-                                    model = detailImageRequest,
-                                    contentDescription = vehicle.displayTitle,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
+                        ) { candidates ->
+                            ResilientAppImage(
+                                candidateUrls = candidates,
+                                contentDescription = vehicle.displayTitle,
+                                cacheKeyPrefix = "veh_detail_${vehicle.id}_${selectedPhotoIndex}",
+                                crossfadeMillis = 180,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            ) {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
@@ -345,23 +332,15 @@ fun VehicleDetailPane(
                         }
                     }
 
-                    if (allPhotos.size > 1) {
+                    if (photoSlots.size > 1) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            itemsIndexed(allPhotos) { index, photo ->
+                            itemsIndexed(photoSlots) { index, slotCandidates ->
                                 val isSelected = index == selectedPhotoIndex
                                 val thumbBorder by animateColorAsState(
                                     targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                     animationSpec = tween(180),
                                     label = "thumb_border"
                                 )
-                                val thumbRequest = remember(vehicle.id, photo) {
-                                    ImageRequest.Builder(context)
-                                        .data(decodeImageModel(photo))
-                                        .memoryCacheKey("veh_thumb_${vehicle.id}_${photo.hashCode()}")
-                                        .size(228, 168)
-                                        .crossfade(150)
-                                        .build()
-                                }
                                 Box(
                                     modifier = Modifier
                                         .size(width = 72.dp, height = 52.dp)
@@ -372,14 +351,26 @@ fun VehicleDetailPane(
                                             color = thumbBorder,
                                             shape = MaterialTheme.shapes.small
                                         )
-                                        .clickable { selectedPhotoIndex = index }
+                                        .clickable { selectedPhotoIndex = index },
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    AsyncImage(
-                                        model = thumbRequest,
+                                    ResilientAppImage(
+                                        candidateUrls = slotCandidates,
                                         contentDescription = "Vehicle photo ${index + 1}",
+                                        cacheKeyPrefix = "veh_thumb_${vehicle.id}_$index",
+                                        width = 228,
+                                        height = 168,
+                                        crossfadeMillis = 150,
                                         modifier = Modifier.matchParentSize(),
                                         contentScale = ContentScale.Crop
-                                    )
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.DirectionsCar,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                 }
                             }
                         }

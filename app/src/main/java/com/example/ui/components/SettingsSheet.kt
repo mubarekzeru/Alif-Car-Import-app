@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.R
 import com.example.data.model.TikTokPost
 import com.example.data.model.Vehicle
 import com.example.ui.viewmodel.DashboardSection
@@ -53,7 +54,7 @@ import com.example.ui.viewmodel.DashboardSection
 fun SettingsTabContent(
     userEmail: String?,
     brandDisplayName: String,
-    brandLogoModel: Any,
+    brandLogoCandidates: List<String>,
     selectedSection: DashboardSection,
     vehicles: List<Vehicle>,
     tikTokPosts: List<TikTokPost>,
@@ -149,15 +150,29 @@ fun SettingsTabContent(
                                 shadowElevation = 4.dp,
                                 modifier = Modifier.size(76.dp)
                             ) {
-                                AsyncImage(
-                                    model = brandLogoModel,
+                                ResilientAppImage(
+                                    candidateUrls = brandLogoCandidates,
                                     contentDescription = brandDisplayName,
+                                    cacheKeyPrefix = "account_brand_logo",
+                                    width = 240,
+                                    height = 240,
+                                    crossfadeMillis = 160,
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(5.dp)
                                         .clip(CircleShape),
                                     contentScale = ContentScale.Crop
-                                )
+                                ) {
+                                    AsyncImage(
+                                        model = R.drawable.img_alif_logo,
+                                        contentDescription = brandDisplayName,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(5.dp)
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
                             }
 
                             Column(

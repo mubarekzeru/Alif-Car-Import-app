@@ -113,9 +113,12 @@ import com.example.ui.components.BottomNavTab
 import com.example.ui.components.CustomerInquiriesTabContent
 import com.example.ui.components.FloatingBottomNavBar
 import com.example.ui.components.LotMetricsStrip
+import com.example.ui.components.ResilientAppImage
 import com.example.ui.components.SettingsTabContent
 import com.example.ui.components.VehicleInventoryCard
+import com.example.ui.components.buildAppImageRequest
 import com.example.ui.components.decodeImageModel
+import com.example.ui.components.resolveCandidateImageUrls
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.theme.WarmCoralTop
 import com.example.ui.theme.WarmPeachWash
@@ -229,14 +232,8 @@ fun DashboardScreen(
         .trim()
         .ifBlank { stringResource(R.string.app_name) }
     val brandLogoUrl = showroomConfig.branding.logoUrl.trim()
-    val brandLogoModel: Any = remember(brandLogoUrl) {
-        decodeImageModel(brandLogoUrl) ?: R.drawable.img_alif_logo
-    }
-    val brandLogoRequest = remember(brandLogoModel) {
-        ImageRequest.Builder(context)
-            .data(brandLogoModel)
-            .crossfade(160)
-            .build()
+    val brandLogoCandidates = remember(brandLogoUrl) {
+        resolveCandidateImageUrls(brandLogoUrl)
     }
 
     LaunchedEffect(snackbarMessage) {
@@ -290,7 +287,7 @@ fun DashboardScreen(
                         sortMenuExpanded = sortMenuExpanded,
                         pendingAlertsCount = pendingAlertsCount,
                         brandDisplayName = brandDisplayName,
-                        brandLogoRequest = brandLogoRequest,
+                        brandLogoCandidates = brandLogoCandidates,
                         onSearchQueryChange = viewModel::updateSearchQuery,
                         onToggleSortMenu = { sortMenuExpanded = it },
                         onSelectSortOrder = { order ->
@@ -321,7 +318,7 @@ fun DashboardScreen(
                     SettingsTabContent(
                         userEmail = userEmail,
                         brandDisplayName = brandDisplayName,
-                        brandLogoModel = brandLogoRequest,
+                        brandLogoCandidates = brandLogoCandidates,
                         selectedSection = dashboardSection,
                         vehicles = allVehicles,
                         tikTokPosts = tikTokPosts,
@@ -483,7 +480,7 @@ private fun HomeDashboardTab(
     sortMenuExpanded: Boolean,
     pendingAlertsCount: Int,
     brandDisplayName: String,
-    brandLogoRequest: ImageRequest,
+    brandLogoCandidates: List<String>,
     onSearchQueryChange: (String) -> Unit,
     onToggleSortMenu: (Boolean) -> Unit,
     onSelectSortOrder: (VehicleSortOrder) -> Unit,
@@ -595,15 +592,29 @@ private fun HomeDashboardTab(
                                     .size(44.dp)
                                     .testTag("account_menu_button")
                             ) {
-                                AsyncImage(
-                                    model = brandLogoRequest,
+                                ResilientAppImage(
+                                    candidateUrls = brandLogoCandidates,
                                     contentDescription = "$brandDisplayName account",
+                                    cacheKeyPrefix = "brand_logo",
+                                    width = 160,
+                                    height = 160,
+                                    crossfadeMillis = 160,
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(3.dp)
                                         .clip(CircleShape),
                                     contentScale = ContentScale.Crop
-                                )
+                                ) {
+                                    AsyncImage(
+                                        model = R.drawable.img_alif_logo,
+                                        contentDescription = "$brandDisplayName account",
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(3.dp)
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
                             }
                         }
                     }

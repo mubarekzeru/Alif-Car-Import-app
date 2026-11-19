@@ -295,7 +295,9 @@ private fun DocumentSnapshot.toShowroomConfigSafe(): ShowroomConfig {
     val branding = if (bMap != null) {
         BrandingConfig(
             companyName = (bMap["companyName"] as? String).orEmpty().ifBlank { defaults.branding.companyName },
-            logoUrl = (bMap["logoUrl"] as? String).orEmpty(),
+            logoUrl = listOf("logoUrl", "logoURL", "logo_url", "logo", "imageUrl", "image")
+                .firstNotNullOfOrNull { extractPortalImageUrl(bMap[it]) }
+                .orEmpty(),
             tagline = (bMap["tagline"] as? String).orEmpty()
         )
     } else defaults.branding
@@ -305,7 +307,9 @@ private fun DocumentSnapshot.toShowroomConfigSafe(): ShowroomConfig {
             kicker = (hMap["kicker"] as? String).orEmpty(),
             title = (hMap["title"] as? String).orEmpty().ifBlank { defaults.hero.title },
             description = (hMap["description"] as? String).orEmpty(),
-            imageUrl = (hMap["imageUrl"] as? String).orEmpty(),
+            imageUrl = listOf("imageUrl", "imageURL", "image_url", "image", "bannerUrl", "backgroundImage", "coverImage")
+                .firstNotNullOfOrNull { extractPortalImageUrl(hMap[it]) }
+                .orEmpty(),
             ctaLabel = (hMap["ctaLabel"] as? String).orEmpty().ifBlank { defaults.hero.ctaLabel }
         )
     } else defaults.hero
@@ -361,15 +365,28 @@ private fun DocumentSnapshot.toTikTokPostSafe(): TikTokPost? {
         getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
     }.getOrNull()
 
+    val resolvedCover = listOf(
+        "coverImageUrl", "coverImage", "coverUrl", "cover",
+        "thumbnailUrl", "thumbnail", "thumbUrl", "imageUrl", "image", "photoUrl", "photo"
+    ).firstNotNullOfOrNull { extractPortalImageUrl(root[it]) }.orEmpty()
+
     return TikTokPost(
         id = docId,
         title = (root["title"] as? String).orEmpty(),
         caption = (root["caption"] as? String).orEmpty(),
         tiktokUrl = (root["tiktokUrl"] as? String).orEmpty(),
-        coverImageUrl = (root["coverImageUrl"] as? String).orEmpty(),
+        coverImageUrl = resolvedCover,
         sortOrder = sortOrder,
         updatedAt = updatedAt
     )
+}
+
+private fun extractPortalImageUrl(raw: Any?): String? = when (raw) {
+    is String -> raw.trim().takeIf { it.isNotEmpty() }
+    is Map<*, *> -> listOf("url", "imageUrl", "downloadURL", "downloadUrl", "src", "secure_url", "path")
+        .firstNotNullOfOrNull { (raw[it] as? String)?.trim()?.takeIf(String::isNotEmpty) }
+    is List<*> -> raw.firstNotNullOfOrNull { extractPortalImageUrl(it) }
+    else -> null
 }
 
 private fun DocumentSnapshot.toInquirySafe(): CustomerInquiry? {

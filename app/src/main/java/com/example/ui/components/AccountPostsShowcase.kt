@@ -60,6 +60,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -335,20 +336,11 @@ fun AccountInventoryGridCard(
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
     val statusColors = vehicle.statusEnum.colors()
 
-    val dataModel = remember(vehicle.id, vehicle.imageUrl) { vehicle.resolveImageModel() }
-    val imageRequest = remember(vehicle.id, dataModel) {
-        dataModel?.let {
-            ImageRequest.Builder(context)
-                .data(it)
-                .memoryCacheKey("acc_veh_${vehicle.id}_${vehicle.imageUrl.hashCode()}")
-                .size(480, 360)
-                .crossfade(160)
-                .build()
-        }
+    val photoCandidates = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
+        vehicle.allResolvedPhotoUrls()
     }
 
     Card(
@@ -369,14 +361,16 @@ fun AccountInventoryGridCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                if (imageRequest != null) {
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = vehicle.displayTitle,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
+                ResilientAppImage(
+                    candidateUrls = photoCandidates,
+                    contentDescription = vehicle.displayTitle,
+                    cacheKeyPrefix = "acc_veh_${vehicle.id}",
+                    width = 480,
+                    height = 360,
+                    crossfadeMillis = 160,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                ) {
                     Icon(
                         imageVector = Icons.Default.DirectionsCar,
                         contentDescription = vehicle.displayTitle,
@@ -533,18 +527,8 @@ fun TikTokInstagramGridCard(
     val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
 
-    val coverModel = remember(post.id, post.coverImageUrl) {
-        decodeImageModel(post.coverImageUrl)
-    }
-    val coverRequest = remember(post.id, coverModel) {
-        coverModel?.let {
-            ImageRequest.Builder(context)
-                .data(it)
-                .memoryCacheKey("tiktok_grid_${post.id}_${post.coverImageUrl.hashCode()}")
-                .size(420, 560)
-                .crossfade(160)
-                .build()
-        }
+    val coverCandidates = remember(post.id, post.coverImageUrl) {
+        resolveCandidateImageUrls(post.coverImageUrl)
     }
 
     Card(
@@ -558,14 +542,16 @@ fun TikTokInstagramGridCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (coverRequest != null) {
-                AsyncImage(
-                    model = coverRequest,
-                    contentDescription = post.title.ifBlank { "TikTok video" },
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
+            ResilientAppImage(
+                candidateUrls = coverCandidates,
+                contentDescription = post.title.ifBlank { "TikTok video" },
+                cacheKeyPrefix = "tiktok_grid_${post.id}",
+                width = 420,
+                height = 560,
+                crossfadeMillis = 160,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            ) {
                 // Sleek Instagram Reel style gradient thumbnail preview
                 Box(
                     modifier = Modifier
@@ -798,7 +784,9 @@ fun TikTokPostDetailDialog(
     onDeleteClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val coverModel = remember(post.id, post.coverImageUrl) { decodeImageModel(post.coverImageUrl) }
+    val coverCandidates = remember(post.id, post.coverImageUrl) {
+        resolveCandidateImageUrls(post.coverImageUrl)
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -820,14 +808,14 @@ fun TikTokPostDetailDialog(
                         .fillMaxWidth()
                         .height(210.dp)
                 ) {
-                    if (coverModel != null) {
-                        AsyncImage(
-                            model = coverModel,
-                            contentDescription = post.title,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
+                    ResilientAppImage(
+                        candidateUrls = coverCandidates,
+                        contentDescription = post.title,
+                        cacheKeyPrefix = "tiktok_detail_${post.id}",
+                        crossfadeMillis = 160,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()

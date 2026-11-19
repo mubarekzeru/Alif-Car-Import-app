@@ -222,8 +222,8 @@ fun AddEditVehicleScreen(
         (parsedOriginalPrice != null && parsedOriginalPrice in 0L..100_000_000L)
     val formValid = yearValid && priceValid && originalPriceValid
 
-    val previewModel: Any? = remember(imageUrlInput) {
-        decodeImageModel(imageUrlInput)
+    val previewCandidates = remember(imageUrlInput) {
+        resolveCandidateImageUrls(imageUrlInput)
     }
     val hasPickedDataUrl = imageUrlInput.startsWith("data:image", ignoreCase = true)
 
@@ -305,14 +305,16 @@ fun AddEditVehicleScreen(
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (previewModel != null) {
-                            AsyncImage(
-                                model = previewModel,
-                                contentDescription = "Vehicle photo preview",
-                                modifier = Modifier.matchParentSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
+                        ResilientAppImage(
+                            candidateUrls = previewCandidates,
+                            contentDescription = "Vehicle photo preview",
+                            cacheKeyPrefix = "veh_edit_preview_${editingVehicle?.id ?: "new"}",
+                            width = 360,
+                            height = 264,
+                            crossfadeMillis = 160,
+                            modifier = Modifier.matchParentSize(),
+                            contentScale = ContentScale.Crop
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.DirectionsCar,
                                 contentDescription = "No vehicle photo selected",
@@ -425,12 +427,28 @@ fun AddEditVehicleScreen(
                                         .clip(MaterialTheme.shapes.small)
                                         .background(MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
-                                    AsyncImage(
-                                        model = decodeImageModel(img),
+                                    val galleryCandidates = remember(img) {
+                                        resolveCandidateImageUrls(img)
+                                    }
+                                    ResilientAppImage(
+                                        candidateUrls = galleryCandidates,
                                         contentDescription = "Gallery photo ${index + 1}",
+                                        cacheKeyPrefix = "veh_edit_gal_${editingVehicle?.id ?: "new"}_$index",
+                                        width = 220,
+                                        height = 160,
+                                        crossfadeMillis = 140,
                                         modifier = Modifier.matchParentSize(),
                                         contentScale = ContentScale.Crop
-                                    )
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.DirectionsCar,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier
+                                                .align(Alignment.Center)
+                                                .size(22.dp)
+                                        )
+                                    }
                                     IconButton(
                                         onClick = {
                                             galleryImagesInput = galleryImagesInput.filterIndexed { i, _ -> i != index }
@@ -743,6 +761,7 @@ fun AddEditVehicleScreen(
                             attemptedSubmit = true
                             if (formValid) {
                                 val resolvedImageUrl = imageUrlInput.trim()
+                                    .ifEmpty { galleryImagesInput.firstOrNull()?.trim().orEmpty() }
                                     .ifEmpty { "https://alifcarimport.com/placeholder.jpg" }
                                 onSubmit(
                                     VehicleDraft(

@@ -32,7 +32,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
@@ -40,6 +39,7 @@ import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Sell
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
@@ -83,6 +83,7 @@ import com.example.ui.components.colors
 import com.example.ui.components.decodeImageModel
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
+import com.example.ui.components.formatOptionalCurrency
 import com.example.ui.components.formatTimestamp
 import com.example.ui.theme.JetBrainsMonoFontFamily
 
@@ -414,24 +415,27 @@ fun VehicleDetailPane(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = formatCurrency(vehicle.price),
-                                fontFamily = JetBrainsMonoFontFamily,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 21.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            val oldPrice = vehicle.originalPrice
-                            if (oldPrice != null && oldPrice > vehicle.price) {
+                        val formattedPrice = formatOptionalCurrency(vehicle.price)
+                        if (formattedPrice != null) {
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = formatCurrency(oldPrice),
+                                    text = formattedPrice,
                                     fontFamily = JetBrainsMonoFontFamily,
-                                    fontSize = 12.sp,
-                                    textDecoration = TextDecoration.LineThrough,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 21.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
+                                val oldPrice = vehicle.originalPrice
+                                if (oldPrice != null && oldPrice > vehicle.price) {
+                                    Text(
+                                        text = formatCurrency(oldPrice),
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 12.sp,
+                                        textDecoration = TextDecoration.LineThrough,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
@@ -711,10 +715,10 @@ fun VehicleDetailPane(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Default.AttachMoney,
+                            imageVector = Icons.Default.Sell,
                             contentDescription = "Adjust price",
                             tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(21.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }

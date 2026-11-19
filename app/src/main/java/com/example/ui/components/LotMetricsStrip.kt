@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Schedule
@@ -51,9 +51,13 @@ fun LotMetricsStrip(
         item {
             MetricCard(
                 label = "ACTIVE LOT",
-                value = formatCompactCurrency(metrics.activeInventoryValue),
+                value = if (metrics.activeInventoryValue > 0L) {
+                    formatCompactCurrency(metrics.activeInventoryValue)
+                } else {
+                    "—"
+                },
                 sublabel = "${metrics.availableCount + metrics.reservedCount} active units",
-                icon = Icons.Default.AttachMoney,
+                icon = Icons.Default.AccountBalanceWallet,
                 accentColor = MaterialTheme.colorScheme.secondary,
                 isFeatured = true
             )
@@ -77,10 +81,15 @@ fun LotMetricsStrip(
             )
         }
         item {
+            val soldValue = metrics.totalLotValue - metrics.activeInventoryValue
             MetricCard(
                 label = "SOLD",
                 value = metrics.soldCount.toString(),
-                sublabel = formatCompactCurrency(metrics.totalLotValue - metrics.activeInventoryValue),
+                sublabel = if (soldValue > 0L) {
+                    formatCompactCurrency(soldValue)
+                } else {
+                    "completed sales"
+                },
                 icon = Icons.Default.DirectionsCar,
                 accentColor = SlateSold
             )

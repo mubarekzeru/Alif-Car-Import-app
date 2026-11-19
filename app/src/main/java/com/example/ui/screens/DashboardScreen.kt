@@ -11,12 +11,15 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -85,8 +88,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -134,9 +141,7 @@ fun DashboardScreen(
     onOpenAddTikTok: () -> Unit,
     onOpenEditTikTok: (String) -> Unit,
     onOpenNotifications: () -> Unit,
-    onOpenContactSocialLocation: () -> Unit,
-    onOpenAdminAccess: () -> Unit,
-    onSignOutClick: () -> Unit
+    onOpenSettings: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
@@ -149,19 +154,52 @@ fun DashboardScreen(
     val dashboardSection by portalViewModel.dashboardSection.collectAsStateWithLifecycle()
     val deleteTikTokCandidate by portalViewModel.deleteTikTokCandidate.collectAsStateWithLifecycle()
     val isPortalMutating by portalViewModel.isMutating.collectAsStateWithLifecycle()
-    val isChangingPassword by portalViewModel.isChangingPassword.collectAsStateWithLifecycle()
     val portalSnackbar by portalViewModel.snackbarMessage.collectAsStateWithLifecycle()
     val showroomConfig by portalViewModel.showroomConfig.collectAsStateWithLifecycle()
     val tikTokPosts by portalViewModel.tikTokPosts.collectAsStateWithLifecycle()
     val inquiriesState by portalViewModel.inquiriesState.collectAsStateWithLifecycle()
     val loginAlerts by portalViewModel.loginAlerts.collectAsStateWithLifecycle()
-    val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
-    val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var addMenuExpanded by remember { mutableStateOf(false) }
+    var isBottomNavVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(selectedBottomTab) {
+        isBottomNavVisible = true
+    }
+
+    val bottomNavNestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            private var accumulatedDy = 0f
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                val dy = consumed.y
+                if (dy < -1f) {
+                    // User scrolled down (content moved up) -> hide navigation bar
+                    accumulatedDy = if (accumulatedDy < 0f) accumulatedDy + dy else dy
+                    if (accumulatedDy < -24f && isBottomNavVisible && !addMenuExpanded) {
+                        isBottomNavVisible = false
+                        accumulatedDy = 0f
+                    }
+                } else if (dy > 1f || (dy == 0f && available.y > 16f)) {
+                    // User scrolled up (content moved down) -> reveal navigation bar
+                    val upDelta = if (dy > 1f) dy else available.y
+                    accumulatedDy = if (accumulatedDy > 0f) accumulatedDy + upDelta else upDelta
+                    if (accumulatedDy > 14f && !isBottomNavVisible) {
+                        isBottomNavVisible = true
+                        accumulatedDy = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
 
     // Ordered from lowest priority to highest priority (last enabled BackHandler wins)
     BackHandler(enabled = selectedBottomTab != BottomNavTab.HOME) {
@@ -213,10 +251,18 @@ fun DashboardScreen(
         portalViewModel.consumeSnackbar()
     }
 
+    val navShouldShow = isBottomNavVisible || addMenuExpanded
+    val snackbarBottomPadding by animateDpAsState(
+        targetValue = if (navShouldShow) 84.dp else 16.dp,
+        animationSpec = tween(260, easing = TabSlideEasing),
+        label = "snackbar_bottom_padding"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .nestedScroll(bottomNavNestedScrollConnection)
     ) {
         AnimatedContent(
             targetState = selectedBottomTab,
@@ -280,9 +326,6 @@ fun DashboardScreen(
                         vehicles = allVehicles,
                         tikTokPosts = tikTokPosts,
                         tikTokHandle = showroomConfig.tiktok.handle,
-                        sessions = sessions,
-                        loginAtMillis = currentLoginAtMillis,
-                        isMutatingPassword = isChangingPassword,
                         onSelectSection = portalViewModel::selectDashboardSection,
                         onOpenVehicleDetail = { vehicle -> onOpenVehicleDetail(vehicle.id) },
                         onOpenEditVehicle = { vehicle -> onOpenEditVehicle(vehicle.id) },
@@ -292,11 +335,7 @@ fun DashboardScreen(
                         onOpenEditTikTok = { post -> onOpenEditTikTok(post.id) },
                         onDeleteTikTok = portalViewModel::requestDeleteTikTokPost,
                         onOpenAddTikTok = onOpenAddTikTok,
-                        onDeactivateDevice = portalViewModel::deactivateOtherDevice,
-                        onChangePassword = portalViewModel::changePassword,
-                        onOpenContactSocialLocation = onOpenContactSocialLocation,
-                        onOpenAdminAccess = onOpenAdminAccess,
-                        onSignOutClick = onSignOutClick
+                        onOpenSettings = onOpenSettings
                     )
                 }
             }
@@ -325,28 +364,47 @@ fun DashboardScreen(
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 84.dp)
+                .padding(bottom = snackbarBottomPadding)
         )
 
-        FloatingBottomNavBar(
-            selectedTab = selectedBottomTab,
-            isAddExpanded = addMenuExpanded,
-            inquiriesBadgeCount = inquiryCount,
-            onSelectTab = { tab ->
-                addMenuExpanded = false
-                portalViewModel.selectBottomNavTab(tab)
-            },
-            onToggleAddMenu = { addMenuExpanded = !addMenuExpanded },
-            onAddVehicleClick = {
-                addMenuExpanded = false
-                onOpenAddVehicle()
-            },
-            onAddTikTokClick = {
-                addMenuExpanded = false
-                onOpenAddTikTok()
-            },
+        AnimatedVisibility(
+            visible = navShouldShow,
+            enter = slideInVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                initialOffsetY = { fullHeight -> fullHeight + fullHeight / 3 }
+            ) + fadeIn(tween(220, easing = TabSlideEasing)),
+            exit = slideOutVertically(
+                animationSpec = tween(250, easing = TabSlideEasing),
+                targetOffsetY = { fullHeight -> fullHeight + fullHeight / 3 }
+            ) + fadeOut(tween(180)),
             modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        ) {
+            FloatingBottomNavBar(
+                selectedTab = selectedBottomTab,
+                isAddExpanded = addMenuExpanded,
+                inquiriesBadgeCount = inquiryCount,
+                onSelectTab = { tab ->
+                    addMenuExpanded = false
+                    isBottomNavVisible = true
+                    portalViewModel.selectBottomNavTab(tab)
+                },
+                onToggleAddMenu = {
+                    isBottomNavVisible = true
+                    addMenuExpanded = !addMenuExpanded
+                },
+                onAddVehicleClick = {
+                    addMenuExpanded = false
+                    onOpenAddVehicle()
+                },
+                onAddTikTokClick = {
+                    addMenuExpanded = false
+                    onOpenAddTikTok()
+                }
+            )
+        }
     }
 
     deleteCandidate?.let { vehicle ->

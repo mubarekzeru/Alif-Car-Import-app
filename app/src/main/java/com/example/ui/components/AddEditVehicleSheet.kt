@@ -11,10 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -113,10 +113,10 @@ fun AddEditVehicleScreen(
         mutableStateOf(editingVehicle?.title ?: "")
     }
     var priceInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.price?.toString() ?: "")
+        mutableStateOf(editingVehicle?.price?.takeIf { it > 0L }?.toString() ?: "")
     }
     var originalPriceInput by remember(editingVehicle?.id) {
-        mutableStateOf(editingVehicle?.originalPrice?.toString() ?: "")
+        mutableStateOf(editingVehicle?.originalPrice?.takeIf { it > 0L }?.toString() ?: "")
     }
     var mileageInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.mileage ?: "")
@@ -262,7 +262,7 @@ fun AddEditVehicleScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding(),
+                .consumeWindowInsets(innerPadding),
             contentAlignment = Alignment.TopCenter
         ) {
             Column(
@@ -500,7 +500,7 @@ fun AddEditVehicleScreen(
                             if (digits.length <= 9) priceInput = digits
                         },
                         label = { Text("Price") },
-                        prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
+                        prefix = { Text("ETB ", fontFamily = JetBrainsMonoFontFamily) },
                         isError = attemptedSubmit && !priceValid,
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -515,7 +515,7 @@ fun AddEditVehicleScreen(
                             if (digits.length <= 9) originalPriceInput = digits
                         },
                         label = { Text("Original Price") },
-                        prefix = { Text("$", fontFamily = JetBrainsMonoFontFamily) },
+                        prefix = { Text("ETB ", fontFamily = JetBrainsMonoFontFamily) },
                         isError = attemptedSubmit && !originalPriceValid,
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

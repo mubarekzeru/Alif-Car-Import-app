@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -204,7 +203,6 @@ fun AuthScreen(
                 )
             )
             .safeDrawingPadding()
-            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
         contentAlignment = Alignment.Center
@@ -245,8 +243,7 @@ fun AuthScreen(
                     Surface(
                         modifier = Modifier.size(96.dp),
                         shape = CircleShape,
-                        color = Color.White,
-                        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                        color = Color.White
                     ) {
                         AsyncImage(
                             model = R.drawable.img_alif_logo,

@@ -5,6 +5,7 @@ import com.example.data.model.VehicleStatus
 import com.example.ui.components.formatCompactCurrency
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
+import com.example.ui.components.formatOptionalCurrency
 import com.google.firebase.firestore.FieldValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -102,8 +103,10 @@ class ExampleUnitTest {
 
     @Test
     fun formatters_formatCurrencyAndMileageCleanly() {
-        assertEquals("$89,500", formatCurrency(89500L))
-        assertEquals("$1.25M", formatCompactCurrency(1_250_000L))
+        assertEquals("ETB 89,500", formatCurrency(89500L))
+        assertEquals("ETB 1.25M", formatCompactCurrency(1_250_000L))
+        assertEquals(null, formatOptionalCurrency(0L))
+        assertEquals("ETB 2,500,000", formatOptionalCurrency(2_500_000L))
         assertEquals("12,400 km", formatMileageDisplay("12,400"))
         assertEquals("8,200 mi", formatMileageDisplay("8,200 mi"))
         assertEquals("0 km", formatMileageDisplay("  "))

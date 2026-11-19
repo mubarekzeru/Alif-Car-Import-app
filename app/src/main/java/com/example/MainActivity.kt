@@ -20,7 +20,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,7 +48,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +72,7 @@ import com.example.auth.signOut
 import com.example.data.firebase.PortalRepository
 import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.firebase.VehicleRepository
+import com.example.ui.components.AccountSettingsScreen
 import com.example.ui.components.AddEditTikTokScreen
 import com.example.ui.components.AddEditVehicleScreen
 import com.example.ui.components.AdminAccessScreen
@@ -107,6 +106,7 @@ const val ROUTE_VEHICLE_FORM = "vehicle_form?vehicleId={vehicleId}"
 const val ROUTE_QUICK_PRICE = "quick_price/{vehicleId}"
 const val ROUTE_TIKTOK_FORM = "tiktok_form?postId={postId}"
 const val ROUTE_NOTIFICATIONS = "notifications"
+const val ROUTE_SETTINGS = "settings"
 const val ROUTE_CONTACT_SOCIAL_LOCATION = "contact_social_location"
 const val ROUTE_ADMIN_ACCESS = "admin_access"
 
@@ -253,15 +253,7 @@ private fun BrandLaunchSplash() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.background
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
             .safeDrawingPadding()
             .padding(24.dp),
         contentAlignment = Alignment.Center
@@ -276,16 +268,14 @@ private fun BrandLaunchSplash() {
             Surface(
                 modifier = Modifier.size(116.dp),
                 shape = CircleShape,
-                color = Color.White,
-                border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)),
-                shadowElevation = 12.dp
+                color = Color.White
             ) {
                 AsyncImage(
                     model = R.drawable.img_alif_logo,
                     contentDescription = stringResource(R.string.app_name),
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(6.dp)
+                        .padding(4.dp)
                         .clip(CircleShape),
                     contentScale = ContentScale.Fit
                 )
@@ -393,6 +383,7 @@ private fun AuthenticatedLotAdmin(
     val inventorySnackbar by viewModel.snackbarMessage.collectAsStateWithLifecycle()
 
     val isPortalMutating by portalViewModel.isMutating.collectAsStateWithLifecycle()
+    val isChangingPassword by portalViewModel.isChangingPassword.collectAsStateWithLifecycle()
     val portalSnackbar by portalViewModel.snackbarMessage.collectAsStateWithLifecycle()
     val showroomConfig by portalViewModel.showroomConfig.collectAsStateWithLifecycle()
     val tikTokPosts by portalViewModel.tikTokPosts.collectAsStateWithLifecycle()
@@ -400,6 +391,8 @@ private fun AuthenticatedLotAdmin(
     val adminAccessState by portalViewModel.adminAccessState.collectAsStateWithLifecycle()
     val loginAlerts by portalViewModel.loginAlerts.collectAsStateWithLifecycle()
     val notificationTab by portalViewModel.notificationTab.collectAsStateWithLifecycle()
+    val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
+    val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -467,15 +460,8 @@ private fun AuthenticatedLotAdmin(
                 onOpenNotifications = {
                     navController.navigate(ROUTE_NOTIFICATIONS) { launchSingleTop = true }
                 },
-                onOpenContactSocialLocation = {
-                    navController.navigate(ROUTE_CONTACT_SOCIAL_LOCATION) { launchSingleTop = true }
-                },
-                onOpenAdminAccess = {
-                    navController.navigate(ROUTE_ADMIN_ACCESS) { launchSingleTop = true }
-                },
-                onSignOutClick = {
-                    portalViewModel.prepareSignOut()
-                    signOut(credentialManager = credentialManager, scope = scope)
+                onOpenSettings = {
+                    navController.navigate(ROUTE_SETTINGS) { launchSingleTop = true }
                 }
             )
         }
@@ -599,6 +585,29 @@ private fun AuthenticatedLotAdmin(
                 onSelectTab = portalViewModel::selectNotificationTab,
                 onConfirmItWasMe = portalViewModel::confirmLoginAlertIsMe,
                 onRejectNotMe = portalViewModel::rejectLoginAlertNotMe,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(ROUTE_SETTINGS) {
+            AccountSettingsScreen(
+                sessions = sessions,
+                loginAtMillis = currentLoginAtMillis,
+                isMutatingPassword = isChangingPassword,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onDeactivateDevice = portalViewModel::deactivateOtherDevice,
+                onChangePassword = portalViewModel::changePassword,
+                onOpenContactSocialLocation = {
+                    navController.navigate(ROUTE_CONTACT_SOCIAL_LOCATION) { launchSingleTop = true }
+                },
+                onOpenAdminAccess = {
+                    navController.navigate(ROUTE_ADMIN_ACCESS) { launchSingleTop = true }
+                },
+                onSignOutClick = {
+                    portalViewModel.prepareSignOut()
+                    signOut(credentialManager = credentialManager, scope = scope)
+                },
                 onBack = { navController.popBackStack() }
             )
         }

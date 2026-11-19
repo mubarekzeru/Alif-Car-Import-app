@@ -328,24 +328,27 @@ fun VehicleInventoryCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = formatCurrency(vehicle.price),
-                        fontFamily = JetBrainsMonoFontFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    val oldPrice = vehicle.originalPrice
-                    if (oldPrice != null && oldPrice > vehicle.price) {
+                val formattedPrice = formatOptionalCurrency(vehicle.price)
+                if (formattedPrice != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = formatCurrency(oldPrice),
+                            text = formattedPrice,
                             fontFamily = JetBrainsMonoFontFamily,
-                            fontSize = 11.sp,
-                            textDecoration = TextDecoration.LineThrough,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        val oldPrice = vehicle.originalPrice
+                        if (oldPrice != null && oldPrice > vehicle.price) {
+                            Text(
+                                text = formatCurrency(oldPrice),
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 11.sp,
+                                textDecoration = TextDecoration.LineThrough,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

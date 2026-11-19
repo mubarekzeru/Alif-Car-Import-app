@@ -26,16 +26,17 @@ import java.util.Locale
 
 private val decodedDataUrlCache = object : LruCache<String, ByteArray>(48) {}
 
-private val usdFormatter: NumberFormat
-    get() = NumberFormat.getCurrencyInstance(Locale.US).apply {
-        maximumFractionDigits = 0
-    }
+private val etbNumberFormatter: NumberFormat
+    get() = NumberFormat.getIntegerInstance(Locale.US)
 
-fun formatCurrency(amount: Long): String = usdFormatter.format(amount)
+fun formatCurrency(amount: Long): String = "ETB ${etbNumberFormatter.format(amount)}"
+
+fun formatOptionalCurrency(amount: Long): String? =
+    amount.takeIf { it > 0L }?.let { formatCurrency(it) }
 
 fun formatCompactCurrency(amount: Long): String = when {
-    amount >= 1_000_000L -> String.format(Locale.US, "$%.2fM", amount / 1_000_000.0)
-    amount >= 10_000L -> String.format(Locale.US, "$%.1fK", amount / 1_000.0)
+    amount >= 1_000_000L -> String.format(Locale.US, "ETB %.2fM", amount / 1_000_000.0)
+    amount >= 10_000L -> String.format(Locale.US, "ETB %.1fK", amount / 1_000.0)
     else -> formatCurrency(amount)
 }
 

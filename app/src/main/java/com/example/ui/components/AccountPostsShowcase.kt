@@ -507,13 +507,16 @@ fun AccountInventoryGridCard(
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = formatCurrency(vehicle.price),
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.secondary
-                )
+                val formattedPrice = formatOptionalCurrency(vehicle.price)
+                if (formattedPrice != null) {
+                    Text(
+                        text = formattedPrice,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
             }
         }
     }

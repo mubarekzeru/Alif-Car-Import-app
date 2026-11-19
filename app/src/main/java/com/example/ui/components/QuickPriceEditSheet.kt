@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -130,8 +130,11 @@ fun QuickPriceEditScreen(
             return@Scaffold
         }
 
-        var priceInput by remember(vehicle.id) { mutableStateOf(vehicle.price.toString()) }
-        val parsedPrice = priceInput.toLongOrNull()
+        var priceInput by remember(vehicle.id) {
+            mutableStateOf(vehicle.price.takeIf { it > 0L }?.toString() ?: "")
+        }
+        val trimmedInput = priceInput.trim()
+        val parsedPrice = if (trimmedInput.isEmpty()) 0L else trimmedInput.toLongOrNull()
         val isValid = parsedPrice != null && parsedPrice in 0L..100_000_000L
         val delta = if (parsedPrice != null) parsedPrice - vehicle.price else 0L
 
@@ -139,7 +142,7 @@ fun QuickPriceEditScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding(),
+                .consumeWindowInsets(innerPadding),
             contentAlignment = Alignment.TopCenter
         ) {
             Column(
@@ -158,7 +161,11 @@ fun QuickPriceEditScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "Current price: ${formatCurrency(vehicle.price)}",
+                        text = if (vehicle.price > 0L) {
+                            "Current price: ${formatCurrency(vehicle.price)}"
+                        } else {
+                            "No price set"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -175,7 +182,7 @@ fun QuickPriceEditScreen(
                     label = { Text("New Asking Price") },
                     prefix = {
                         Text(
-                            text = "$",
+                            text = "ETB ",
                             fontFamily = JetBrainsMonoFontFamily,
                             fontWeight = FontWeight.Bold
                         )
@@ -191,7 +198,7 @@ fun QuickPriceEditScreen(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
-                            else -> Text("Use quick nudges below or type a new price")
+                            else -> Text("Use quick nudges below or leave blank to hide price")
                         }
                     },
                     isError = !isValid,
@@ -210,14 +217,14 @@ fun QuickPriceEditScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val nudges = listOf(-1000L to "-$1k", -500L to "-$500", 500L to "+$500", 1000L to "+$1k")
+                    val nudges = listOf(-100_000L to "-100k", -50_000L to "-50k", 50_000L to "+50k", 100_000L to "+100k")
                     nudges.forEach { (step, label) ->
                         FilterChip(
                             selected = false,
                             onClick = {
                                 val current = priceInput.toLongOrNull() ?: vehicle.price
                                 val next = (current + step).coerceIn(0L, 100_000_000L)
-                                priceInput = next.toString()
+                                priceInput = if (next > 0L) next.toString() else ""
                             },
                             label = {
                                 Text(

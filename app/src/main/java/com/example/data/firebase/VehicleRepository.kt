@@ -217,7 +217,9 @@ class VehicleRepository(
 private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
     val data = data ?: return null
     val docId = (data["id"] as? String)?.takeIf { it.isNotBlank() } ?: id
-    val gallery = (data["galleryImages"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+    val gallery = ((data["galleryImages"] as? List<*>) ?: (data["images"] as? List<*>))
+        ?.mapNotNull { it as? String }
+        ?: emptyList()
     val rawMileage = data["mileage"]
     val mileageString = when (rawMileage) {
         is String -> rawMileage
@@ -254,18 +256,25 @@ private fun DocumentSnapshot.toVehicleSafe(): Vehicle? {
         getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
     }.getOrNull()
 
+    val parsedMake = (data["make"] as? String)?.takeIf { it.isNotBlank() }
+        ?: (data["brand"] as? String).orEmpty()
+    val parsedFuelType = (data["fuelType"] as? String)?.takeIf { it.isNotBlank() }
+        ?: (data["fuel"] as? String).orEmpty()
+    val parsedColor = (data["color"] as? String)?.takeIf { it.isNotBlank() }
+        ?: (data["exteriorColor"] as? String).orEmpty()
+
     return Vehicle(
         id = docId,
         title = (data["title"] as? String).orEmpty(),
-        make = (data["make"] as? String).orEmpty(),
+        make = parsedMake,
         model = (data["model"] as? String).orEmpty(),
         year = parsedYear,
         price = parsedPrice,
         originalPrice = parsedOriginalPrice,
         mileage = mileageString,
         transmission = (data["transmission"] as? String).orEmpty(),
-        fuelType = (data["fuelType"] as? String).orEmpty(),
-        color = (data["color"] as? String).orEmpty(),
+        fuelType = parsedFuelType,
+        color = parsedColor,
         origin = (data["origin"] as? String).orEmpty(),
         imageUrl = (data["imageUrl"] as? String).orEmpty(),
         galleryImages = gallery,

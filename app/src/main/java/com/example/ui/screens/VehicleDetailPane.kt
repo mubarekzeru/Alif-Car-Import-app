@@ -32,6 +32,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
@@ -526,36 +528,55 @@ fun VehicleDetailPane(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KeySpecTile(
+                        icon = Icons.Default.DirectionsCar,
+                        label = "Brand",
+                        value = vehicle.make.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
+                        icon = Icons.Default.Category,
+                        label = "Model",
+                        value = vehicle.model.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KeySpecTile(
+                        icon = Icons.Default.CalendarToday,
+                        label = "Year",
+                        value = vehicle.year.takeIf { it > 0 }?.toString() ?: "Not specified",
+                        mono = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    KeySpecTile(
                         icon = Icons.Default.Speed,
                         label = "Mileage",
                         value = formatMileageDisplay(vehicle.mileage),
                         mono = true,
                         modifier = Modifier.weight(1f)
                     )
-                    KeySpecTile(
-                        icon = Icons.Default.Settings,
-                        label = "Transmission",
-                        value = vehicle.transmission.ifBlank { "Not specified" },
-                        modifier = Modifier.weight(1f)
-                    )
                 }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    KeySpecTile(
+                        icon = Icons.Default.Palette,
+                        label = "Color",
+                        value = vehicle.color.ifBlank { "Not specified" },
+                        modifier = Modifier.weight(1f)
+                    )
                     KeySpecTile(
                         icon = Icons.Default.LocalGasStation,
                         label = "Fuel Type",
                         value = vehicle.fuelType.ifBlank { "Not specified" },
                         modifier = Modifier.weight(1f)
                     )
-                    KeySpecTile(
-                        icon = Icons.Default.Palette,
-                        label = "Exterior Color",
-                        value = vehicle.color.ifBlank { "Not specified" },
-                        modifier = Modifier.weight(1f)
-                    )
                 }
 
                 Row(
@@ -563,15 +584,15 @@ fun VehicleDetailPane(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KeySpecTile(
-                        icon = Icons.Default.Public,
-                        label = "Import Origin",
-                        value = vehicle.origin.ifBlank { "Not specified" },
+                        icon = Icons.Default.Settings,
+                        label = "Transmission",
+                        value = vehicle.transmission.ifBlank { "Not specified" },
                         modifier = Modifier.weight(1f)
                     )
                     KeySpecTile(
-                        icon = Icons.Default.DirectionsCar,
-                        label = "Photos",
-                        value = "${(vehicle.galleryImages.size + if (vehicle.imageUrl.isNotBlank()) 1 else 0)} photo(s)",
+                        icon = Icons.Default.Public,
+                        label = "Import Origin",
+                        value = vehicle.origin.ifBlank { "Not specified" },
                         modifier = Modifier.weight(1f)
                     )
                 }

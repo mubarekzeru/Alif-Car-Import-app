@@ -5,6 +5,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,10 +46,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import java.util.Calendar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -100,8 +103,12 @@ fun AddEditVehicleScreen(
 
     var isProcessingPhoto by remember { mutableStateOf(false) }
 
+    val currentYear = remember {
+        Calendar.getInstance().get(Calendar.YEAR).toLong().coerceIn(1950L, 2100L)
+    }
+
     var yearInput by remember(editingVehicle?.id) {
-        mutableStateOf((editingVehicle?.year ?: 2024L).toString())
+        mutableStateOf(editingVehicle?.year?.takeIf { it in 1950L..2100L }?.toString() ?: "")
     }
     var makeInput by remember(editingVehicle?.id) {
         mutableStateOf(editingVehicle?.make ?: "")
@@ -201,7 +208,7 @@ fun AddEditVehicleScreen(
 
     val trimmedYear = yearInput.trim()
     val parsedYear = trimmedYear.takeIf { it.isNotEmpty() }?.toLongOrNull()
-    val resolvedYear = parsedYear ?: 2024L
+    val resolvedYear = parsedYear ?: currentYear
 
     val trimmedPrice = priceInput.trim()
     val parsedPrice = trimmedPrice.takeIf { it.isNotEmpty() }?.toLongOrNull()
@@ -243,17 +250,28 @@ fun AddEditVehicleScreen(
                     }
                 },
                 title = {
-                    Text(
-                        text = if (editingVehicle == null) {
-                            "Publish Vehicle to Portal"
-                        } else {
-                            editingVehicle.displayTitle
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Column {
+                        Text(
+                            text = if (editingVehicle == null) {
+                                "Add Vehicle"
+                            } else {
+                                "Edit Car"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (editingVehicle != null) {
+                            Text(
+                                text = editingVehicle.displayTitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             )
         }
@@ -434,61 +452,144 @@ fun AddEditVehicleScreen(
                     }
                 }
 
-                // Year + Make
+                // Row 1: Title + Brand (matching website Edit Car layout)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedTextField(
-                        value = yearInput,
-                        onValueChange = { if (it.length <= 4) yearInput = it.filter(Char::isDigit) },
-                        label = { Text("Year") },
-                        isError = attemptedSubmit && !yearValid,
+                        value = titleInput,
+                        onValueChange = { if (it.length <= 200) titleInput = it },
+                        label = { Text("Title") },
+                        placeholder = { Text("Leopard 5") },
                         singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                         modifier = Modifier
-                            .weight(0.35f)
-                            .testTag("vehicle_year_input")
+                            .weight(1f)
+                            .testTag("vehicle_title_input")
                     )
                     OutlinedTextField(
                         value = makeInput,
                         onValueChange = { if (it.length <= 80) makeInput = it },
-                        label = { Text("Make") },
-                        placeholder = { Text("Lexus") },
+                        label = { Text("Brand") },
+                        placeholder = { Text("BYD") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                         modifier = Modifier
-                            .weight(0.65f)
+                            .weight(1f)
                             .testTag("vehicle_make_input")
                     )
                 }
 
-                // Model + Display Title
-                OutlinedTextField(
-                    value = modelInput,
-                    onValueChange = { if (it.length <= 120) modelInput = it },
-                    label = { Text("Model") },
-                    placeholder = { Text("RX 350") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                // Row 2: Model + Year
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = modelInput,
+                        onValueChange = { if (it.length <= 120) modelInput = it },
+                        label = { Text("Model") },
+                        placeholder = { Text("SUV") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_model_input")
+                    )
+                    OutlinedTextField(
+                        value = yearInput,
+                        onValueChange = { if (it.length <= 4) yearInput = it.filter(Char::isDigit) },
+                        label = { Text("Year") },
+                        placeholder = { Text(currentYear.toString()) },
+                        isError = attemptedSubmit && !yearValid,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_year_input")
+                    )
+                }
+
+                // Row 3: Mileage + Color
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = mileageInput,
+                        onValueChange = { if (it.length <= 60) mileageInput = it },
+                        label = { Text("Mileage") },
+                        placeholder = { Text("1200") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_mileage_input")
+                    )
+                    OutlinedTextField(
+                        value = colorInput,
+                        onValueChange = { if (it.length <= 80) colorInput = it },
+                        label = { Text("Color") },
+                        placeholder = { Text("Black / Smoke Grey") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_color_input")
+                    )
+                }
+
+                // Row 4: Fuel Type + Transmission
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = fuelTypeInput,
+                        onValueChange = { if (it.length <= 80) fuelTypeInput = it },
+                        label = { Text("Fuel Type") },
+                        placeholder = { Text("Hybrid") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_fuel_type_input")
+                    )
+                    OutlinedTextField(
+                        value = transmissionInput,
+                        onValueChange = { if (it.length <= 80) transmissionInput = it },
+                        label = { Text("Transmission") },
+                        placeholder = { Text("Automatic") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("vehicle_transmission_input")
+                    )
+                }
+
+                // Quick-fill Fuel Type & Transmission chips
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("vehicle_model_input")
-                )
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Hybrid", "Electric", "Petrol", "Diesel").forEach { preset ->
+                        SuggestionChip(
+                            onClick = { fuelTypeInput = preset },
+                            label = { Text(preset, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                    listOf("Automatic", "Manual").forEach { preset ->
+                        SuggestionChip(
+                            onClick = { transmissionInput = preset },
+                            label = { Text(preset, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                }
 
-                OutlinedTextField(
-                    value = titleInput,
-                    onValueChange = { if (it.length <= 200) titleInput = it },
-                    label = { Text("Listing Title") },
-                    placeholder = { Text("2024 Lexus RX 350 F Sport") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("vehicle_title_input")
-                )
-
-                // Price + Original Price
+                // Row 5: Price + Original Price
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -525,65 +626,17 @@ fun AddEditVehicleScreen(
                     )
                 }
 
-                // Mileage + Origin
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedTextField(
-                        value = mileageInput,
-                        onValueChange = { if (it.length <= 60) mileageInput = it },
-                        label = { Text("Mileage") },
-                        placeholder = { Text("12,400 km") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("vehicle_mileage_input")
-                    )
-                    OutlinedTextField(
-                        value = originInput,
-                        onValueChange = { if (it.length <= 100) originInput = it },
-                        label = { Text("Origin") },
-                        placeholder = { Text("Dubai / Japan") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("vehicle_origin_input")
-                    )
-                }
-
-                // Transmission + Fuel Type + Color
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedTextField(
-                        value = transmissionInput,
-                        onValueChange = { if (it.length <= 80) transmissionInput = it },
-                        label = { Text("Transmission") },
-                        placeholder = { Text("Automatic") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = fuelTypeInput,
-                        onValueChange = { if (it.length <= 80) fuelTypeInput = it },
-                        label = { Text("Fuel Type") },
-                        placeholder = { Text("Petrol") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
+                // Origin
                 OutlinedTextField(
-                    value = colorInput,
-                    onValueChange = { if (it.length <= 80) colorInput = it },
-                    label = { Text("Exterior Color") },
-                    placeholder = { Text("Pearl White") },
+                    value = originInput,
+                    onValueChange = { if (it.length <= 100) originInput = it },
+                    label = { Text("Origin") },
+                    placeholder = { Text("Dubai / China / Japan") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("vehicle_origin_input")
                 )
 
                 // Status Selector
@@ -643,8 +696,9 @@ fun AddEditVehicleScreen(
                     value = descriptionInput,
                     onValueChange = { if (it.length <= 4000) descriptionInput = it },
                     label = { Text("Description") },
-                    minLines = 2,
-                    maxLines = 4,
+                    minLines = 3,
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("vehicle_description_input")

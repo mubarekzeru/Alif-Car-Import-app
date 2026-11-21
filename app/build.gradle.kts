@@ -16,8 +16,9 @@ android {
     applicationId = "com.aistudio.lotpulse.kmvxqp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+    versionCode = if (ciRunNumber != null && ciRunNumber > 0) ciRunNumber + 1 else 2
+    versionName = if (ciRunNumber != null && ciRunNumber > 0) "1.0.$ciRunNumber" else "1.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

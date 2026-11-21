@@ -34,7 +34,29 @@ data class ActiveDeviceSession(
     val lastActiveMillis: Long,
     val status: AdminDeviceStatus = AdminDeviceStatus.ACTIVE,
     val isCurrentDevice: Boolean = false
-)
+) {
+    val isWebsiteSession: Boolean
+        get() = isWebsitePlatform(platform)
+
+    companion object {
+        fun isWebsitePlatform(platform: String): Boolean {
+            val normalized = platform.trim().lowercase()
+            if (normalized.isEmpty()) return false
+            if (normalized.contains("mobile") || normalized.contains("android") || normalized.contains("ios")) {
+                return false
+            }
+            return normalized.contains("web") ||
+                normalized.contains("browser") ||
+                normalized.contains("site") ||
+                normalized.contains("desktop") ||
+                normalized.contains("portal") ||
+                normalized.contains("chrome") ||
+                normalized.contains("safari") ||
+                normalized.contains("firefox") ||
+                normalized.contains("edge")
+        }
+    }
+}
 
 data class LoginSecurityAlert(
     val id: String,

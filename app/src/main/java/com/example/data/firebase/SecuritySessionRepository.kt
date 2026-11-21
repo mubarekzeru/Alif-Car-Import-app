@@ -18,6 +18,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -59,6 +60,9 @@ class SecuritySessionRepository(
 
     private val _cloudSyncError = MutableStateFlow<String?>(null)
     val cloudSyncError: StateFlow<String?> = _cloudSyncError.asStateFlow()
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
     private var remoteSessionsListener: ListenerRegistration? = null
     private var remoteAlertsListener: ListenerRegistration? = null
@@ -270,6 +274,69 @@ class SecuritySessionRepository(
         )
         upsertLocalSession(refreshed)
         mirrorSessionToCloud(user.uid, refreshed)
+    }
+
+    suspend fun refreshFromServer() {
+        val user = auth.currentUser ?: return
+        if (_isRefreshing.value) return
+        _isRefreshing.value = true
+        val mySessionId = currentSessionId(user.uid)
+        try {
+            val sessionsSnapshot = db.collection(COL_ADMIN_SESSIONS)
+                .get(Source.SERVER)
+                .await()
+            val remoteSessions = sessionsSnapshot.documents.mapNotNull { doc ->
+                parseRemoteSession(doc, mySessionId)
+            }
+            val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
+            mergeRemoteSessions(remoteSessions, mySessionId)
+
+            val alertsSnapshot = db.collection(COL_LOGIN_ALERTS)
+                .get(Source.SERVER)
+                .await()
+            val existingAlertIds = _alerts.value.map { it.id }.toSet()
+            val remoteAlerts = alertsSnapshot.documents.mapNotNull { doc ->
+                parseRemoteAlert(doc)
+            }
+            mergeRemoteAlerts(remoteAlerts)
+            _cloudSyncError.value = null
+
+            val knownAlertSessionIds = existingAlertSessionIds + remoteAlerts.map { it.sessionId }
+            remoteSessions
+                .filter { !it.isCurrentDevice && it.status == AdminDeviceStatus.ACTIVE }
+                .forEach { remoteSession ->
+                    if (!knownAlertSessionIds.contains(remoteSession.id)) {
+                        val syntheticAlert = LoginSecurityAlert(
+                            id = buildSyntheticAlertId(remoteSession.id, remoteSession.loginAtMillis),
+                            sessionId = remoteSession.id,
+                            email = remoteSession.email,
+                            deviceName = remoteSession.deviceName,
+                            platform = remoteSession.platform,
+                            location = remoteSession.location,
+                            timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
+                                ?: remoteSession.lastActiveMillis,
+                            decision = LoginAlertDecision.PENDING
+                        )
+                        if (_alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }) {
+                            prependLocalAlert(syntheticAlert)
+                            activeAlertCallback?.invoke(syntheticAlert)
+                        }
+                    }
+                }
+
+            remoteAlerts
+                .filter { it.decision == LoginAlertDecision.PENDING && !existingAlertIds.contains(it.id) }
+                .forEach { alert ->
+                    activeAlertCallback?.invoke(alert)
+                }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, COL_ADMIN_SESSIONS)
+            _cloudSyncError.value = "Unable to refresh active devices from cloud right now."
+        } finally {
+            _isRefreshing.value = false
+        }
     }
 
     fun confirmAlertIsMe(alertId: String) {
@@ -571,12 +638,24 @@ class SecuritySessionRepository(
             .ifBlank { (data["userAgent"] as? String).orEmpty().trim().take(80) }
             .ifBlank { "Admin Device" }
 
+        val rawPlatform = (data["platform"] as? String).orEmpty().trim()
+        val normalizedPlatform = when {
+            rawPlatform.isBlank() -> "Website"
+            rawPlatform.equals("web", ignoreCase = true) ||
+                rawPlatform.equals("browser", ignoreCase = true) -> "Website"
+            else -> rawPlatform
+        }
+
+        val resolvedEmail = (data["email"] as? String).orEmpty().trim()
+            .ifBlank { (data["userEmail"] as? String).orEmpty().trim() }
+            .ifBlank { (data["adminEmail"] as? String).orEmpty().trim() }
+
         return ActiveDeviceSession(
             id = id,
             deviceId = devId,
             deviceName = resolvedDeviceName,
-            platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website" },
-            email = (data["email"] as? String).orEmpty().trim(),
+            platform = normalizedPlatform,
+            email = resolvedEmail,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             loginAtMillis = loginMillis,
             lastActiveMillis = activeMillis,

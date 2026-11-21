@@ -342,4 +342,15 @@ class ExampleUnitTest {
             )
         )
     }
+
+    @Test
+    fun activeDeviceSession_identifiesWebsiteVsMobilePlatforms() {
+        assertTrue(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Website"))
+        assertTrue(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Web Admin"))
+        assertTrue(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Browser"))
+        assertTrue(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Desktop Portal"))
+        assertFalse(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Mobile App"))
+        assertFalse(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Android App"))
+        assertFalse(com.example.data.model.ActiveDeviceSession.isWebsitePlatform(""))
+    }
 }

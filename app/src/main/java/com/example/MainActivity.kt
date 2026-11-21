@@ -477,6 +477,7 @@ private fun AuthenticatedLotAdmin(
     val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
     val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
     val securitySyncError by portalViewModel.securitySyncError.collectAsStateWithLifecycle()
+    val isRefreshingSessions by portalViewModel.isRefreshingSessions.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -696,7 +697,9 @@ private fun AuthenticatedLotAdmin(
                     }
                 },
                 onBack = { navController.popBackStack() },
-                securitySyncError = securitySyncError
+                securitySyncError = securitySyncError,
+                isRefreshingSessions = isRefreshingSessions,
+                onRefreshSessions = portalViewModel::refreshActiveSessions
             )
         }
 

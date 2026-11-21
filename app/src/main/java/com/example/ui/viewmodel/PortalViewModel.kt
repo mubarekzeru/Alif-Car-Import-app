@@ -89,6 +89,7 @@ class PortalViewModel(
     val currentLoginAtMillis: StateFlow<Long> = securityRepository.currentLoginAtMillis
     val isCurrentSessionRevoked: StateFlow<Boolean> = securityRepository.isCurrentSessionRevoked
     val securitySyncError: StateFlow<String?> = securityRepository.cloudSyncError
+    val isRefreshingSessions: StateFlow<Boolean> = securityRepository.isRefreshing
 
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
@@ -160,6 +161,12 @@ class PortalViewModel(
     fun refreshSessionHeartbeat() {
         viewModelScope.launch {
             securityRepository.refreshHeartbeat()
+        }
+    }
+
+    fun refreshActiveSessions() {
+        viewModelScope.launch {
+            securityRepository.refreshFromServer()
         }
     }
 

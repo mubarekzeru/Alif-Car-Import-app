@@ -37,9 +37,13 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -101,7 +105,9 @@ fun AccountSettingsScreen(
     onOpenAdminAccess: () -> Unit,
     onSignOutClick: () -> Unit,
     onBack: () -> Unit,
-    securitySyncError: String? = null
+    securitySyncError: String? = null,
+    isRefreshingSessions: Boolean = false,
+    onRefreshSessions: () -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarMessage) {
@@ -109,6 +115,13 @@ fun AccountSettingsScreen(
         snackbarHostState.showSnackbar(message)
         onConsumeSnackbar()
     }
+
+    LaunchedEffect(Unit) {
+        onRefreshSessions()
+    }
+
+    val websiteSessionsCount = remember(sessions) { sessions.count { it.isWebsiteSession } }
+    val mobileSessionsCount = remember(sessions) { sessions.count { !it.isWebsiteSession } }
 
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(loginAtMillis) {
@@ -230,12 +243,58 @@ fun AccountSettingsScreen(
                             }
                         }
 
-                        Text(
-                            text = "ACTIVE DEVICES (${sessions.size})",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "ACTIVE DEVICES (${sessions.size})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
+                            IconButton(
+                                onClick = onRefreshSessions,
+                                enabled = !isRefreshingSessions,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("refresh_active_devices_button")
+                            ) {
+                                if (isRefreshingSessions) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Refresh active devices",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SessionChannelChip(
+                                icon = Icons.Default.PhoneAndroid,
+                                label = "Mobile App: $mobileSessionsCount",
+                                highlighted = mobileSessionsCount > 0,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SessionChannelChip(
+                                icon = Icons.Default.Language,
+                                label = "Website: $websiteSessionsCount",
+                                highlighted = websiteSessionsCount > 0,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
 
                         securitySyncError?.let { syncErr ->
                             Surface(
@@ -292,16 +351,17 @@ fun AccountSettingsScreen(
                 } else {
                     items(items = sessions, key = { "session_${it.id}" }) { session ->
                         val isCurrent = session.isCurrentDevice
+                        val isWebsite = session.isWebsiteSession
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surface
                             ),
                             border = BorderStroke(
                                 width = 1.dp,
-                                color = if (isCurrent) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
-                                } else {
-                                    MaterialTheme.colorScheme.outline
+                                color = when {
+                                    isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                                    isWebsite -> EmeraldAvailable.copy(alpha = 0.65f)
+                                    else -> MaterialTheme.colorScheme.outline
                                 }
                             ),
                             shape = MaterialTheme.shapes.medium,
@@ -318,20 +378,24 @@ fun AccountSettingsScreen(
                                     .fillMaxWidth()
                                     .padding(
                                         horizontal = 12.dp,
-                                        vertical = if (isCurrent) 8.dp else 10.dp
+                                        vertical = if (isCurrent) 9.dp else 10.dp
                                     ),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Devices,
-                                    contentDescription = null,
-                                    tint = if (isCurrent) {
-                                        MaterialTheme.colorScheme.primary
+                                    imageVector = if (isWebsite) {
+                                        Icons.Default.Language
                                     } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                        Icons.Default.PhoneAndroid
                                     },
-                                    modifier = Modifier.size(if (isCurrent) 16.dp else 18.dp)
+                                    contentDescription = if (isWebsite) "Website session" else "Mobile app session",
+                                    tint = when {
+                                        isCurrent -> MaterialTheme.colorScheme.primary
+                                        isWebsite -> EmeraldAvailable
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Column(
                                     modifier = Modifier.weight(1f),
@@ -354,29 +418,75 @@ fun AccountSettingsScreen(
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f, fill = false)
                                         )
-                                        if (isCurrent) {
-                                            Surface(
-                                                color = MaterialTheme.colorScheme.primary,
-                                                shape = CircleShape
-                                            ) {
-                                                Text(
-                                                    text = "Current Device",
-                                                    fontSize = 9.sp,
-                                                    lineHeight = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onPrimary,
-                                                    fontWeight = FontWeight.Bold,
-                                                    maxLines = 1,
-                                                    softWrap = false,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                                )
+                                        when {
+                                            isCurrent -> {
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    shape = CircleShape
+                                                ) {
+                                                    Text(
+                                                        text = "Current Device",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onPrimary,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                            isWebsite -> {
+                                                Surface(
+                                                    color = EmeraldContainer,
+                                                    shape = CircleShape
+                                                ) {
+                                                    Text(
+                                                        text = "Website",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 11.sp,
+                                                        color = EmeraldAvailable,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                            else -> {
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                                    shape = CircleShape
+                                                ) {
+                                                    Text(
+                                                        text = "Mobile App",
+                                                        fontSize = 9.sp,
+                                                        lineHeight = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
-                                    if (session.email.isNotBlank()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(12.dp)
+                                        )
                                         Text(
-                                            text = session.email,
+                                            text = session.email.ifBlank { "Admin email unavailable" },
                                             fontSize = 11.sp,
                                             lineHeight = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             color = MaterialTheme.colorScheme.primary
@@ -430,6 +540,47 @@ fun AccountSettingsScreen(
                                     contentDescription = "View device details",
                                     modifier = Modifier.size(18.dp)
                                 )
+                            }
+                        }
+                    }
+
+                    if (websiteSessionsCount == 0) {
+                        item(key = "website_sessions_status_note") {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                shape = MaterialTheme.shapes.medium,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Language,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = "No website admin sessions connected",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Anyone signed in on the website admin page appears here automatically with their email once the website logs sessions to Firestore (adminSessions).",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -683,17 +834,17 @@ fun AccountSettingsScreen(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsDetailRow(
+                        icon = Icons.Default.Person,
+                        text = "Signed in as: ${session.email.ifBlank { "Admin email unavailable" }}"
+                    )
+                    SettingsDetailRow(
+                        icon = if (session.isWebsiteSession) Icons.Default.Language else Icons.Default.PhoneAndroid,
+                        text = "Platform: ${session.platform}"
+                    )
                     SettingsDetailRow(Icons.Default.Devices, "Device: ${session.deviceName}")
-                    SettingsDetailRow(Icons.Default.AdminPanelSettings, "Platform: ${session.platform}")
                     SettingsDetailRow(Icons.Default.LocationOn, "Location: ${session.location}")
                     SettingsDetailRow(Icons.Default.Schedule, "Logged in: ${formatEpochMillis(session.loginAtMillis)}")
-                    if (session.email.isNotBlank()) {
-                        Text(
-                            text = "Account: ${session.email}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                     if (!session.isCurrentDevice && !isUnlocked) {
                         Surface(
                             color = MaterialTheme.colorScheme.primaryContainer,
@@ -804,6 +955,61 @@ private fun SettingsNavigationRow(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null
+            )
+        }
+    }
+}
+
+@Composable
+private fun SessionChannelChip(
+    icon: ImageVector,
+    label: String,
+    highlighted: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = if (highlighted) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        shape = MaterialTheme.shapes.small,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (highlighted) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+        ),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (highlighted) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(15.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (highlighted) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

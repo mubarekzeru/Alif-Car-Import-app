@@ -35,11 +35,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -55,7 +57,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -66,8 +71,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import coil.compose.AsyncImage
+import com.example.auth.AdminAuthorizationState
+import com.example.auth.AdminVerificationLoadingScreen
 import com.example.auth.AuthScreen
+import com.example.auth.UnauthorizedAdminScreen
 import com.example.auth.isUserVerified
+import com.example.auth.observeAdminAuthorization
 import com.example.auth.signOut
 import com.example.data.firebase.PortalRepository
 import com.example.data.firebase.SecuritySessionRepository
@@ -116,6 +125,8 @@ private val LuxuryEaseOut = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 private enum class AppRootStage {
     SPLASH,
     AUTH,
+    VERIFYING_ADMIN,
+    UNAUTHORIZED,
     AUTHENTICATED
 }
 
@@ -186,8 +197,17 @@ fun LotPulseApp(
     requestedNotificationTab: NotificationCenterTab? = null,
     onConsumeNotificationTab: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    val db = remember(context) {
+        FirebaseFirestore.getInstance(context.getString(R.string.firestore_database_id))
+    }
+
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var authRefreshTick by remember { mutableIntStateOf(0) }
+    var adminCheckTick by remember { mutableIntStateOf(0) }
+    var skipAutoSignIn by remember { mutableStateOf(false) }
     var showLaunchSplash by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
@@ -200,10 +220,28 @@ fun LotPulseApp(
         user?.takeIf { isUserVerified(it) }
     }
 
+    val adminAuthState by produceState<AdminAuthorizationState>(
+        initialValue = AdminAuthorizationState.Checking,
+        key1 = verifiedUser?.uid,
+        key2 = adminCheckTick
+    ) {
+        val active = verifiedUser
+        if (active == null) {
+            value = AdminAuthorizationState.Checking
+            return@produceState
+        }
+        value = AdminAuthorizationState.Checking
+        observeAdminAuthorization(db, active).collect { state ->
+            value = state
+        }
+    }
+
     val stage = when {
         showLaunchSplash -> AppRootStage.SPLASH
         verifiedUser == null -> AppRootStage.AUTH
-        else -> AppRootStage.AUTHENTICATED
+        adminAuthState is AdminAuthorizationState.Checking -> AppRootStage.VERIFYING_ADMIN
+        adminAuthState is AdminAuthorizationState.Authorized -> AppRootStage.AUTHENTICATED
+        else -> AppRootStage.UNAUTHORIZED
     }
 
     AnimatedContent(
@@ -217,7 +255,33 @@ fun LotPulseApp(
     ) { targetStage ->
         when (targetStage) {
             AppRootStage.SPLASH -> BrandLaunchSplash()
-            AppRootStage.AUTH -> AuthScreen(onAuthSuccess = { authRefreshTick++ })
+            AppRootStage.AUTH -> AuthScreen(
+                onAuthSuccess = {
+                    skipAutoSignIn = false
+                    authRefreshTick++
+                    adminCheckTick++
+                },
+                skipAutoSignIn = skipAutoSignIn
+            )
+            AppRootStage.VERIFYING_ADMIN -> AdminVerificationLoadingScreen(
+                email = verifiedUser?.email.orEmpty()
+            )
+            AppRootStage.UNAUTHORIZED -> {
+                val errorState = adminAuthState as? AdminAuthorizationState.Error
+                val deniedState = adminAuthState as? AdminAuthorizationState.Denied
+                UnauthorizedAdminScreen(
+                    email = errorState?.email
+                        ?: deniedState?.email
+                        ?: verifiedUser?.email.orEmpty(),
+                    isNetworkError = errorState != null,
+                    errorMessage = errorState?.message,
+                    onRetry = { adminCheckTick++ },
+                    onSignOut = {
+                        skipAutoSignIn = true
+                        signOut(credentialManager = credentialManager, scope = scope)
+                    }
+                )
+            }
             AppRootStage.AUTHENTICATED -> {
                 val activeUser = verifiedUser
                 if (activeUser != null) {
@@ -225,7 +289,8 @@ fun LotPulseApp(
                         AuthenticatedLotAdmin(
                             activeUser = activeUser,
                             requestedNotificationTab = requestedNotificationTab,
-                            onConsumeNotificationTab = onConsumeNotificationTab
+                            onConsumeNotificationTab = onConsumeNotificationTab,
+                            onWillSignOut = { skipAutoSignIn = true }
                         )
                     }
                 }
@@ -309,7 +374,8 @@ private fun BrandLaunchSplash() {
 private fun AuthenticatedLotAdmin(
     activeUser: FirebaseUser,
     requestedNotificationTab: NotificationCenterTab?,
-    onConsumeNotificationTab: () -> Unit
+    onConsumeNotificationTab: () -> Unit,
+    onWillSignOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -373,9 +439,24 @@ private fun AuthenticatedLotAdmin(
         }
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, activeUser.uid) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                portalViewModel.refreshSessionHeartbeat()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val isSessionRevoked by portalViewModel.isCurrentSessionRevoked.collectAsStateWithLifecycle()
     LaunchedEffect(isSessionRevoked) {
         if (isSessionRevoked) {
+            onWillSignOut()
+            portalViewModel.prepareSignOut()
             signOut(credentialManager = credentialManager, scope = scope)
         }
     }
@@ -395,6 +476,7 @@ private fun AuthenticatedLotAdmin(
     val notificationTab by portalViewModel.notificationTab.collectAsStateWithLifecycle()
     val sessions by portalViewModel.sessions.collectAsStateWithLifecycle()
     val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
+    val securitySyncError by portalViewModel.securitySyncError.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -607,10 +689,14 @@ private fun AuthenticatedLotAdmin(
                     navController.navigate(ROUTE_ADMIN_ACCESS) { launchSingleTop = true }
                 },
                 onSignOutClick = {
-                    portalViewModel.prepareSignOut()
-                    signOut(credentialManager = credentialManager, scope = scope)
+                    onWillSignOut()
+                    scope.launch {
+                        portalViewModel.prepareSignOut()
+                        signOut(credentialManager = credentialManager, scope = scope)
+                    }
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                securitySyncError = securitySyncError
             )
         }
 

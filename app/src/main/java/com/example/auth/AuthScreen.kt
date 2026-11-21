@@ -92,7 +92,8 @@ private enum class AuthScreenMode {
 @Composable
 fun AuthScreen(
     onAuthSuccess: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    skipAutoSignIn: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -124,6 +125,10 @@ fun AuthScreen(
 
     LaunchedEffect(Unit) {
         cardVisible = true
+        if (skipAutoSignIn) {
+            isCheckingSession = false
+            return@LaunchedEffect
+        }
         attemptAutoSignIn(
             context = context,
             credentialManager = credentialManager,

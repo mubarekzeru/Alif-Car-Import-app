@@ -3,15 +3,11 @@ const {
   assertFails,
   assertSucceeds,
 } = require("@firebase/rules-unit-testing");
-const { createRequire } = require("node:module");
-const rutsRequire = createRequire(require.resolve("@firebase/rules-unit-testing"));
-const firebase = rutsRequire("firebase/compat/app");
-rutsRequire("firebase/compat/firestore");
 const { test, before, after, beforeEach } = require("node:test");
 const fs = require("node:fs");
 
 let testEnv;
-const PROJECT_ID = process.env.GCP_PROJECT || "demo-alif-car-import";
+const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
 const BOOTSTRAP_EMAIL = "alifcarimports@gmail.com";
 const OTHER_ADMIN_EMAIL = "manager@alifcarimport.com";
 const NON_ADMIN_EMAIL = "random@example.com";
@@ -21,8 +17,12 @@ const [emulatorHost, emulatorPortStr] = (
 ).split(":");
 const emulatorPort = parseInt(emulatorPortStr, 10);
 
-function serverTimestamp() {
-  return firebase.firestore.FieldValue.serverTimestamp();
+function pastTimestamp(offsetMs = 2000) {
+  return new Date(Date.now() - offsetMs);
+}
+
+function futureTimestamp(offsetMs = 60000) {
+  return new Date(Date.now() + offsetMs);
 }
 
 function validVehiclePayload(vehicleId, overrides = {}) {
@@ -44,7 +44,45 @@ function validVehiclePayload(vehicleId, overrides = {}) {
     status: "available",
     featured: false,
     createdAt: "2026-11-17T10:00:00.000Z",
-    updatedAt: serverTimestamp(),
+    updatedAt: pastTimestamp(),
+    ...overrides,
+  };
+}
+
+function validAdminSessionPayload(sessionId, uid, overrides = {}) {
+  const nowMs = Date.now();
+  const ts = pastTimestamp();
+  return {
+    id: sessionId,
+    uid,
+    deviceId: "dev_abc123456789",
+    deviceName: "Samsung SM-S928B (Android 15)",
+    platform: "Mobile App",
+    email: BOOTSTRAP_EMAIL,
+    location: "Addis Ababa, Ethiopia",
+    loginAtMillis: nowMs - 5000,
+    lastActiveMillis: nowMs,
+    status: "active",
+    createdAt: ts,
+    updatedAt: ts,
+    ...overrides,
+  };
+}
+
+function validLoginAlertPayload(alertId, sessionId, uid, overrides = {}) {
+  const ts = pastTimestamp();
+  return {
+    id: alertId,
+    sessionId,
+    uid,
+    email: BOOTSTRAP_EMAIL,
+    deviceName: "Chrome on Windows",
+    platform: "Website",
+    location: "Addis Ababa, Ethiopia",
+    timestampMillis: Date.now() - 2000,
+    decision: "pending",
+    createdAt: ts,
+    updatedAt: ts,
     ...overrides,
   };
 }
@@ -102,7 +140,7 @@ test("Public can list and get vehicles, but cannot create/update/delete", async 
   await assertFails(
     unauthDb.collection("vehicles").doc("veh_lexus_rx350_2024").update({
       price: 1,
-      updatedAt: serverTimestamp(),
+      updatedAt: pastTimestamp(1000),
     })
   );
   await assertFails(
@@ -132,31 +170,27 @@ test("Bootstrap owner can create, quick price/status/featured update, full edit,
     )
   );
 
-  // Quick price update matching Android repository
   await assertSucceeds(
     col.doc("veh_lc300").update({
       price: 87900,
-      updatedAt: serverTimestamp(),
+      updatedAt: pastTimestamp(1000),
     })
   );
 
-  // Quick status update matching Android repository
   await assertSucceeds(
     col.doc("veh_lc300").update({
       status: "reserved",
-      updatedAt: serverTimestamp(),
+      updatedAt: pastTimestamp(1000),
     })
   );
 
-  // Quick featured toggle matching Android repository
   await assertSucceeds(
     col.doc("veh_lc300").update({
       featured: true,
-      updatedAt: serverTimestamp(),
+      updatedAt: pastTimestamp(1000),
     })
   );
 
-  // Delete succeeds
   await assertSucceeds(col.doc("veh_lc300").delete());
 });
 
@@ -166,7 +200,7 @@ test("Allows allowlisted admin in config/adminAccess and blocks non-admin", asyn
       .firestore()
       .collection("config")
       .doc("adminAccess")
-      .set({ adminEmails: [OTHER_ADMIN_EMAIL] });
+      .set({ adminEmails: [OTHER_ADMIN_EMAIL], updatedAt: pastTimestamp() });
   });
 
   const adminDb = testEnv
@@ -212,27 +246,21 @@ test("Rejects mismatched id, empty imageUrl/description, or mutating createdAt",
   );
 
   await assertFails(
-    col
-      .doc("veh_mismatch")
-      .set(validVehiclePayload("different_id"))
+    col.doc("veh_mismatch").set(validVehiclePayload("different_id"))
   );
 
   await assertFails(
-    col
-      .doc("veh_empty_img")
-      .set(validVehiclePayload("veh_empty_img", { imageUrl: "" }))
+    col.doc("veh_empty_img").set(validVehiclePayload("veh_empty_img", { imageUrl: "" }))
   );
 
   await assertFails(
-    col
-      .doc("veh_empty_desc")
-      .set(validVehiclePayload("veh_empty_desc", { description: "" }))
+    col.doc("veh_empty_desc").set(validVehiclePayload("veh_empty_desc", { description: "" }))
   );
 
   await assertFails(
     col.doc("veh_valid").update({
       createdAt: "2027-01-01T00:00:00.000Z",
-      updatedAt: serverTimestamp(),
+      updatedAt: pastTimestamp(1000),
     })
   );
 });
@@ -251,7 +279,6 @@ test("Showroom config, TikTok posts, inquiries, and adminAccess enforce website 
     })
     .firestore();
 
-  // Showroom config write by owner, read by public, write denied to non-admin
   const showroomPayload = {
     branding: { companyName: "Alif Car Import", logoUrl: "", tagline: "Direct imports" },
     hero: { kicker: "NEW", title: "Direct Imports", description: "Clean cars", imageUrl: "", ctaLabel: "Browse" },
@@ -266,13 +293,12 @@ test("Showroom config, TikTok posts, inquiries, and adminAccess enforce website 
       mapsUrl: "",
       landmarkNote: "",
     },
-    updatedAt: serverTimestamp(),
+    updatedAt: pastTimestamp(),
   };
   await assertSucceeds(ownerDb.collection("config").doc("showroom").set(showroomPayload));
   await assertSucceeds(nonAdminDb.collection("config").doc("showroom").get());
   await assertFails(nonAdminDb.collection("config").doc("showroom").set(showroomPayload));
 
-  // TikTok posts CRUD by owner, read by public, write denied to non-admin
   const ttPayload = {
     id: "tt_clip_1",
     title: "2024 Prado",
@@ -280,13 +306,14 @@ test("Showroom config, TikTok posts, inquiries, and adminAccess enforce website 
     tiktokUrl: "https://www.tiktok.com/@alif/video/1",
     coverImageUrl: "",
     sortOrder: 0,
-    updatedAt: serverTimestamp(),
+    updatedAt: pastTimestamp(),
   };
   await assertSucceeds(ownerDb.collection("tiktokPosts").doc("tt_clip_1").set(ttPayload));
   await assertSucceeds(nonAdminDb.collection("tiktokPosts").get());
-  await assertFails(nonAdminDb.collection("tiktokPosts").doc("tt_clip_2").set({ ...ttPayload, id: "tt_clip_2" }));
+  await assertFails(
+    nonAdminDb.collection("tiktokPosts").doc("tt_clip_2").set({ ...ttPayload, id: "tt_clip_2" })
+  );
 
-  // Inquiries create by anyone, list only by bootstrap owner
   await assertSucceeds(
     nonAdminDb.collection("inquiries").doc("inq_1").set({
       id: "inq_1",
@@ -294,9 +321,270 @@ test("Showroom config, TikTok posts, inquiries, and adminAccess enforce website 
       phone: "+251911",
       vehicleTitle: "2024 Lexus RX",
       message: "Interested",
-      createdAt: serverTimestamp(),
+      createdAt: pastTimestamp(),
     })
   );
   await assertSucceeds(ownerDb.collection("inquiries").get());
   await assertFails(nonAdminDb.collection("inquiries").get());
+});
+
+// --- MULTI-DEVICE ADMIN SESSIONS & LOGIN ALERTS TESTS ---
+
+test("adminSessions: blocks unauthenticated, non-admin, and unverified email spoof", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const spoofDb = testEnv
+    .authenticatedContext("spoof_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: false,
+    })
+    .firestore();
+
+  await assertFails(unauthDb.collection("adminSessions").get());
+  await assertFails(
+    unauthDb
+      .collection("adminSessions")
+      .doc("sess_unauth_1")
+      .set(validAdminSessionPayload("sess_unauth_1", "unauth_uid"))
+  );
+
+  await assertFails(nonAdminDb.collection("adminSessions").get());
+  await assertFails(
+    nonAdminDb
+      .collection("adminSessions")
+      .doc("sess_user_1")
+      .set(validAdminSessionPayload("sess_user_1", "user_uid", { email: NON_ADMIN_EMAIL }))
+  );
+
+  await assertFails(spoofDb.collection("adminSessions").get());
+  await assertFails(
+    spoofDb
+      .collection("adminSessions")
+      .doc("sess_spoof_1")
+      .set(validAdminSessionPayload("sess_spoof_1", "spoof_uid"))
+  );
+});
+
+test("adminSessions: multiple admins (mobile + website) sync sessions, refresh heartbeat, and revoke remotely", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context
+      .firestore()
+      .collection("config")
+      .doc("adminAccess")
+      .set({ adminEmails: [OTHER_ADMIN_EMAIL], updatedAt: pastTimestamp() });
+  });
+
+  const ownerMobileDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const otherAdminWebDb = testEnv
+    .authenticatedContext("mgr_uid", {
+      email: OTHER_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // Owner signs in on Mobile App
+  await assertSucceeds(
+    ownerMobileDb
+      .collection("adminSessions")
+      .doc("sess_owner_phone1")
+      .set(validAdminSessionPayload("sess_owner_phone1", "owner_uid"))
+  );
+
+  // Another admin signs in on Website by email
+  await assertSucceeds(
+    otherAdminWebDb
+      .collection("adminSessions")
+      .doc("sess_mgr_web1")
+      .set(
+        validAdminSessionPayload("sess_mgr_web1", "mgr_uid", {
+          deviceId: "web_browser_99",
+          deviceName: "Chrome on Windows",
+          platform: "Website",
+          email: OTHER_ADMIN_EMAIL,
+          userAgent: "Mozilla/5.0 Chrome/128",
+        })
+      )
+  );
+
+  // Both admins can list all active sessions (mirrors SecuritySessionRepository snapshot listener)
+  const ownerListSnap = await assertSucceeds(ownerMobileDb.collection("adminSessions").get());
+  if (ownerListSnap.size !== 2) {
+    throw new Error(`Expected 2 active sessions, found ${ownerListSnap.size}`);
+  }
+
+  // Owner updates own heartbeat & enriched IP location (Action 2)
+  await assertSucceeds(
+    ownerMobileDb.collection("adminSessions").doc("sess_owner_phone1").update({
+      location: "Bole, Addis Ababa",
+      lastActiveMillis: Date.now(),
+      updatedAt: pastTimestamp(500),
+    })
+  );
+
+  // Non-owner admin cannot spoof heartbeat/location of someone else's session
+  await assertFails(
+    otherAdminWebDb.collection("adminSessions").doc("sess_owner_phone1").update({
+      location: "Fake City",
+      updatedAt: pastTimestamp(500),
+    })
+  );
+
+  // Owner can immediately revoke the other device's session (Action 1)
+  await assertSucceeds(
+    ownerMobileDb.collection("adminSessions").doc("sess_mgr_web1").update({
+      status: "revoked",
+      updatedAt: pastTimestamp(500),
+    })
+  );
+
+  // Owner can re-activate own device session after signing back in
+  await assertSucceeds(
+    ownerMobileDb.collection("adminSessions").doc("sess_owner_phone1").update({
+      status: "revoked",
+      updatedAt: pastTimestamp(500),
+    })
+  );
+  await assertSucceeds(
+    ownerMobileDb.collection("adminSessions").doc("sess_owner_phone1").update({
+      status: "active",
+      loginAtMillis: Date.now(),
+      lastActiveMillis: Date.now(),
+      updatedAt: pastTimestamp(200),
+    })
+  );
+
+  // Rejects delete, uid spoof, ghost field, future timestamp, and immutable field mutation
+  await assertFails(ownerMobileDb.collection("adminSessions").doc("sess_mgr_web1").delete());
+  await assertFails(
+    ownerMobileDb
+      .collection("adminSessions")
+      .doc("sess_spoof_uid")
+      .set(validAdminSessionPayload("sess_spoof_uid", "someone_else"))
+  );
+  await assertFails(
+    ownerMobileDb
+      .collection("adminSessions")
+      .doc("sess_ghost")
+      .set(validAdminSessionPayload("sess_ghost", "owner_uid", { isSuperAdmin: true }))
+  );
+  await assertFails(
+    ownerMobileDb
+      .collection("adminSessions")
+      .doc("sess_future")
+      .set(validAdminSessionPayload("sess_future", "owner_uid", { updatedAt: futureTimestamp() }))
+  );
+  await assertFails(
+    ownerMobileDb.collection("adminSessions").doc("sess_owner_phone1").update({
+      deviceId: "hijacked_device",
+      updatedAt: pastTimestamp(200),
+    })
+  );
+});
+
+test("loginAlerts: admins receive and verify cross-device login alerts with strict state locking", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context
+      .firestore()
+      .collection("config")
+      .doc("adminAccess")
+      .set({ adminEmails: [OTHER_ADMIN_EMAIL], updatedAt: pastTimestamp() });
+  });
+
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const mgrDb = testEnv
+    .authenticatedContext("mgr_uid", {
+      email: OTHER_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // Non-admin blocked from reading or writing loginAlerts
+  await assertFails(nonAdminDb.collection("loginAlerts").get());
+  await assertFails(
+    nonAdminDb
+      .collection("loginAlerts")
+      .doc("alert_unauth")
+      .set(validLoginAlertPayload("alert_unauth", "sess_1", "user_uid"))
+  );
+
+  // Manager logs in on website -> writes pending loginAlert
+  await assertSucceeds(
+    mgrDb
+      .collection("loginAlerts")
+      .doc("alert_web_001")
+      .set(
+        validLoginAlertPayload("alert_web_001", "sess_mgr_web1", "mgr_uid", {
+          email: OTHER_ADMIN_EMAIL,
+        })
+      )
+  );
+
+  // Creator can enrich location on their own pending alert (Action 2)
+  await assertSucceeds(
+    mgrDb.collection("loginAlerts").doc("alert_web_001").update({
+      location: "Addis Ababa, Ethiopia",
+      updatedAt: pastTimestamp(500),
+    })
+  );
+
+  // Owner lists loginAlerts on mobile app
+  const alertsSnap = await assertSucceeds(ownerDb.collection("loginAlerts").get());
+  if (alertsSnap.size !== 1) {
+    throw new Error(`Expected 1 login alert, found ${alertsSnap.size}`);
+  }
+
+  // Owner rejects alert ("It wasn't me") -> transitions pending -> rejected_not_me (Action 1)
+  await assertSucceeds(
+    ownerDb.collection("loginAlerts").doc("alert_web_001").update({
+      decision: "rejected_not_me",
+      updatedAt: pastTimestamp(300),
+    })
+  );
+
+  // Terminal state locking: once decided, alert cannot be flipped back or modified again
+  await assertFails(
+    mgrDb.collection("loginAlerts").doc("alert_web_001").update({
+      decision: "confirmed_me",
+      updatedAt: pastTimestamp(200),
+    })
+  );
+
+  // Rejects creating pre-confirmed alert, spoofing uid, mutating email, or deleting alert
+  await assertFails(
+    ownerDb
+      .collection("loginAlerts")
+      .doc("alert_bad_state")
+      .set(validLoginAlertPayload("alert_bad_state", "sess_1", "owner_uid", { decision: "confirmed_me" }))
+  );
+  await assertFails(
+    ownerDb
+      .collection("loginAlerts")
+      .doc("alert_bad_uid")
+      .set(validLoginAlertPayload("alert_bad_uid", "sess_1", "mgr_uid"))
+  );
+  await assertFails(ownerDb.collection("loginAlerts").doc("alert_web_001").delete());
 });

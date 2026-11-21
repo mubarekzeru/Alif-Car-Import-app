@@ -284,4 +284,62 @@ class ExampleUnitTest {
         assertEquals("https://alifcarimport.com/uploads/leopard-side.jpg", slots[1].first())
         assertTrue(vehicleWithGalleryOnly.allResolvedPhotoUrls().contains("https://alifcarimport.com/uploads/leopard-front.jpg"))
     }
+
+    @Test
+    fun adminAuthorizationPolicy_allowsOnlyOwnerAndApprovedVerifiedAdmins() {
+        // Bootstrap owner allowed when verified (case-insensitive)
+        assertTrue(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = " AlifCarImports@gmail.com ",
+                isEmailVerified = true,
+                isExplicitUidAdmin = false,
+                allowlistedEmails = emptyList()
+            )
+        )
+        // Bootstrap owner blocked if unverified
+        assertFalse(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = "alifcarimports@gmail.com",
+                isEmailVerified = false,
+                isExplicitUidAdmin = false,
+                allowlistedEmails = emptyList()
+            )
+        )
+        // Approved email in Admin Access allowlist allowed when verified
+        assertTrue(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = "partner@alifcarimport.com",
+                isEmailVerified = true,
+                isExplicitUidAdmin = false,
+                allowlistedEmails = listOf("Partner@AlifCarImport.com")
+            )
+        )
+        // Explicit UID admin allowed when verified
+        assertTrue(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = "staff@example.com",
+                isEmailVerified = true,
+                isExplicitUidAdmin = true,
+                allowlistedEmails = emptyList()
+            )
+        )
+        // Random unapproved email is strictly denied
+        assertFalse(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = "stranger@gmail.com",
+                isEmailVerified = true,
+                isExplicitUidAdmin = false,
+                allowlistedEmails = listOf("partner@alifcarimport.com")
+            )
+        )
+        // Blank or null email is denied
+        assertFalse(
+            com.example.auth.AdminAuthorizationPolicy.isAuthorizedAdmin(
+                userEmail = "",
+                isEmailVerified = true,
+                isExplicitUidAdmin = false,
+                allowlistedEmails = listOf("partner@alifcarimport.com")
+            )
+        )
+    }
 }

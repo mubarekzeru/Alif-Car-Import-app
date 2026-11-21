@@ -88,6 +88,7 @@ class PortalViewModel(
     val loginAlerts: StateFlow<List<LoginSecurityAlert>> = securityRepository.alerts
     val currentLoginAtMillis: StateFlow<Long> = securityRepository.currentLoginAtMillis
     val isCurrentSessionRevoked: StateFlow<Boolean> = securityRepository.isCurrentSessionRevoked
+    val securitySyncError: StateFlow<String?> = securityRepository.cloudSyncError
 
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
@@ -153,6 +154,12 @@ class PortalViewModel(
             securityRepository.registerCurrentDeviceSignIn(user) { alert ->
                 SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
             }
+        }
+    }
+
+    fun refreshSessionHeartbeat() {
+        viewModelScope.launch {
+            securityRepository.refreshHeartbeat()
         }
     }
 
@@ -243,7 +250,7 @@ class PortalViewModel(
         }
     }
 
-    fun prepareSignOut() {
+    suspend fun prepareSignOut() {
         securityRepository.markCurrentSessionSignedOut()
     }
 

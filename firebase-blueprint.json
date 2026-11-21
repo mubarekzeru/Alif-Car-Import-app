@@ -105,6 +105,77 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "name", "phone", "vehicleTitle", "message", "createdAt"]
+    },
+    "AdminSession": {
+      "title": "AdminSession",
+      "description": "Active or revoked admin login session synced across mobile app and website admin portal. Clients submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "platform": { "type": "string" },
+        "email": { "type": "string" },
+        "location": { "type": "string" },
+        "loginAtMillis": { "type": "integer" },
+        "lastActiveMillis": { "type": "integer" },
+        "status": {
+          "type": "string",
+          "enum": ["active", "revoked"]
+        },
+        "userAgent": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "uid",
+        "deviceId",
+        "deviceName",
+        "platform",
+        "email",
+        "location",
+        "loginAtMillis",
+        "lastActiveMillis",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LoginAlert": {
+      "title": "LoginAlert",
+      "description": "Security notification record created on admin sign-in so admins can confirm or immediately revoke unrecognized access. Clients submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "platform": { "type": "string" },
+        "location": { "type": "string" },
+        "timestampMillis": { "type": "integer" },
+        "decision": {
+          "type": "string",
+          "enum": ["pending", "confirmed_me", "rejected_not_me"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "uid",
+        "email",
+        "deviceName",
+        "platform",
+        "location",
+        "timestampMillis",
+        "decision",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -127,6 +198,14 @@
     "/inquiries/{inquiryId}": {
       "schema": { "$ref": "#/entities/CustomerInquiry" },
       "description": "Customer inquiries submitted on the website."
+    },
+    "/adminSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AdminSession" },
+      "description": "Active and revoked admin device sessions across web and mobile."
+    },
+    "/loginAlerts/{alertId}": {
+      "schema": { "$ref": "#/entities/LoginAlert" },
+      "description": "Real-time admin sign-in alerts for confirming or blocking devices."
     }
   }
 }

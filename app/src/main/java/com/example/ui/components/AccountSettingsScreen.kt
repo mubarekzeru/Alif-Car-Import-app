@@ -100,7 +100,8 @@ fun AccountSettingsScreen(
     onOpenContactSocialLocation: () -> Unit,
     onOpenAdminAccess: () -> Unit,
     onSignOutClick: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    securitySyncError: String? = null
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarMessage) {
@@ -236,6 +237,23 @@ fun AccountSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
 
+                        securitySyncError?.let { syncErr ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = MaterialTheme.shapes.small,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
+                            ) {
+                                Text(
+                                    text = syncErr,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
+                                )
+                            }
+                        }
+
                         deviceActionFeedback?.let { feedback ->
                             Surface(
                                 color = MaterialTheme.colorScheme.errorContainer,
@@ -353,6 +371,16 @@ fun AccountSettingsScreen(
                                                 )
                                             }
                                         }
+                                    }
+                                    if (session.email.isNotBlank()) {
+                                        Text(
+                                            text = session.email,
+                                            fontSize = 11.sp,
+                                            lineHeight = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
                                     }
                                     Row(
                                         modifier = Modifier

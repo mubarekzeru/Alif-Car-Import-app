@@ -70,9 +70,18 @@ object SecurityNotificationHelper {
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val notified = prefs.getStringSet(KEY_NOTIFIED_ALERT_IDS, emptySet()) ?: emptySet()
-        if (notified.contains(alert.id)) return
+        val sessionDedupKey = alert.sessionId
+            .takeIf { it.isNotBlank() }
+            ?.let { "sess_${it}_${alert.timestampMillis / 60_000L}" }
+        if (notified.contains(alert.id) || (sessionDedupKey != null && notified.contains(sessionDedupKey))) {
+            return
+        }
+        val keysToStore = buildList {
+            add(alert.id)
+            if (sessionDedupKey != null) add(sessionDedupKey)
+        }
         prefs.edit()
-            .putStringSet(KEY_NOTIFIED_ALERT_IDS, (notified + alert.id).toList().takeLast(50).toSet())
+            .putStringSet(KEY_NOTIFIED_ALERT_IDS, (notified + keysToStore).toList().takeLast(80).toSet())
             .apply()
 
         val tapIntent = Intent(context, MainActivity::class.java).apply {

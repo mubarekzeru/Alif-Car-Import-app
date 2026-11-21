@@ -14,17 +14,19 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -55,17 +57,21 @@ class SecuritySessionRepository(
     private val _isCurrentSessionRevoked = MutableStateFlow(false)
     val isCurrentSessionRevoked: StateFlow<Boolean> = _isCurrentSessionRevoked.asStateFlow()
 
+    private val _cloudSyncError = MutableStateFlow<String?>(null)
+    val cloudSyncError: StateFlow<String?> = _cloudSyncError.asStateFlow()
+
     private var remoteSessionsListener: ListenerRegistration? = null
     private var remoteAlertsListener: ListenerRegistration? = null
-    private var cloudSyncPermitted = true
+    private var activeAlertCallback: ((LoginSecurityAlert) -> Unit)? = null
 
     init {
         loadFromLocalPrefs()
     }
 
     fun currentSessionId(uid: String? = auth.currentUser?.uid): String {
-        val cleanUid = uid?.takeIf { it.isNotBlank() } ?: "anon"
-        return "sess_${cleanUid.take(10)}_${localDeviceId.take(12)}"
+        val cleanUid = sanitizeIdPart(uid).ifBlank { "anon" }
+        val cleanDevice = sanitizeIdPart(localDeviceId).ifBlank { "device" }
+        return "sess_${cleanUid.take(10)}_${cleanDevice.take(12)}"
     }
 
     fun startObservingCloudSecurity(
@@ -74,85 +80,80 @@ class SecuritySessionRepository(
     ) {
         stopObservingCloudSecurity()
         loadFromLocalPrefs()
-
-        if (!cloudSyncPermitted) return
+        activeAlertCallback = onNewAlert
+        _cloudSyncError.value = null
 
         val mySessionId = currentSessionId(uid)
         runCatching {
             remoteSessionsListener = db.collection(COL_ADMIN_SESSIONS)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                            cloudSyncPermitted = false
-                            stopObservingCloudSecurity()
-                        }
+                        handleFirestoreError(error, OperationType.LIST, COL_ADMIN_SESSIONS)
+                        _cloudSyncError.value =
+                            "Unable to sync active devices across devices (${error.code.name.lowercase().replace('_', ' ')})."
                         return@addSnapshotListener
                     }
                     if (snapshot == null) return@addSnapshotListener
+                    _cloudSyncError.value = null
 
                     val remoteList = snapshot.documents.mapNotNull { doc ->
-                        val data = doc.data ?: return@mapNotNull null
-                        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
-                        val devId = (data["deviceId"] as? String).orEmpty()
-                        val status = AdminDeviceStatus.fromValue(data["status"] as? String)
-                        val loginMillis = (data["loginAtMillis"] as? Number)?.toLong()
-                            ?: SecurityLockHelper.normalizeMillis(doc.getTimestamp("loginAt"))
-                        val activeMillis = (data["lastActiveMillis"] as? Number)?.toLong() ?: loginMillis
-
-                        if (id == mySessionId && status == AdminDeviceStatus.REVOKED) {
-                            _isCurrentSessionRevoked.value = true
-                        }
-
-                        ActiveDeviceSession(
-                            id = id,
-                            deviceId = devId,
-                            deviceName = (data["deviceName"] as? String).orEmpty().ifBlank { "Admin Device" },
-                            platform = (data["platform"] as? String).orEmpty().ifBlank { "Website" },
-                            email = (data["email"] as? String).orEmpty(),
-                            location = (data["location"] as? String).orEmpty().ifBlank { "Unknown location" },
-                            loginAtMillis = loginMillis,
-                            lastActiveMillis = activeMillis,
-                            status = status,
-                            isCurrentDevice = devId == localDeviceId || id == mySessionId
-                        )
+                        parseRemoteSession(doc, mySessionId)
                     }
 
-                    mergeRemoteSessions(remoteList)
+                    val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
+                    mergeRemoteSessions(remoteList, mySessionId)
+
+                    // If another device signed in and wrote to adminSessions without a matching loginAlerts doc,
+                    // surface a pending LoginSecurityAlert immediately so the admin gets notified and can verify/revoke it.
+                    remoteList
+                        .filter { !it.isCurrentDevice && it.status == AdminDeviceStatus.ACTIVE }
+                        .forEach { remoteSession ->
+                            if (!existingAlertSessionIds.contains(remoteSession.id)) {
+                                val syntheticAlert = LoginSecurityAlert(
+                                    id = buildSyntheticAlertId(remoteSession.id, remoteSession.loginAtMillis),
+                                    sessionId = remoteSession.id,
+                                    email = remoteSession.email,
+                                    deviceName = remoteSession.deviceName,
+                                    platform = remoteSession.platform,
+                                    location = remoteSession.location,
+                                    timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
+                                        ?: remoteSession.lastActiveMillis,
+                                    decision = LoginAlertDecision.PENDING
+                                )
+                                if (_alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }) {
+                                    prependLocalAlert(syntheticAlert)
+                                    activeAlertCallback?.invoke(syntheticAlert)
+                                }
+                            }
+                        }
                 }
 
             remoteAlertsListener = db.collection(COL_LOGIN_ALERTS)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        if (error.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                            cloudSyncPermitted = false
-                            stopObservingCloudSecurity()
-                        }
+                        handleFirestoreError(error, OperationType.LIST, COL_LOGIN_ALERTS)
+                        _cloudSyncError.value =
+                            "Unable to sync login alerts across devices (${error.code.name.lowercase().replace('_', ' ')})."
                         return@addSnapshotListener
                     }
                     if (snapshot == null) return@addSnapshotListener
+                    _cloudSyncError.value = null
 
                     val existingIds = _alerts.value.map { it.id }.toSet()
                     val remoteAlerts = snapshot.documents.mapNotNull { doc ->
-                        val data = doc.data ?: return@mapNotNull null
-                        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
-                        LoginSecurityAlert(
-                            id = id,
-                            sessionId = (data["sessionId"] as? String).orEmpty(),
-                            email = (data["email"] as? String).orEmpty(),
-                            deviceName = (data["deviceName"] as? String).orEmpty().ifBlank { "Admin Device" },
-                            platform = (data["platform"] as? String).orEmpty().ifBlank { "Website" },
-                            location = (data["location"] as? String).orEmpty().ifBlank { "Unknown location" },
-                            timestampMillis = (data["timestampMillis"] as? Number)?.toLong()
-                                ?: SecurityLockHelper.normalizeMillis(doc.getTimestamp("createdAt")),
-                            decision = LoginAlertDecision.fromValue(data["decision"] as? String)
-                        )
+                        parseRemoteAlert(doc)
                     }
 
                     mergeRemoteAlerts(remoteAlerts)
                     remoteAlerts
                         .filter { it.decision == LoginAlertDecision.PENDING && !existingIds.contains(it.id) }
-                        .forEach(onNewAlert)
+                        .forEach { alert ->
+                            activeAlertCallback?.invoke(alert)
+                        }
                 }
+        }.onFailure { err ->
+            handleFirestoreError(err, OperationType.LIST, COL_ADMIN_SESSIONS)
+            _cloudSyncError.value = "Unable to start live device sync."
         }
     }
 
@@ -161,6 +162,7 @@ class SecuritySessionRepository(
         remoteSessionsListener = null
         remoteAlertsListener?.remove()
         remoteAlertsListener = null
+        activeAlertCallback = null
     }
 
     suspend fun registerCurrentDeviceSignIn(
@@ -170,7 +172,7 @@ class SecuritySessionRepository(
         _isCurrentSessionRevoked.value = false
         val sessionId = currentSessionId(user.uid)
         val deviceName = buildDeviceDisplayName()
-        val email = user.email.orEmpty()
+        val email = user.email.orEmpty().trim()
         val now = System.currentTimeMillis()
         val authSignInTs = user.metadata?.lastSignInTimestamp ?: 0L
         val lastRecordedAuthTs = prefs.getLong(KEY_LAST_AUTH_SIGNIN_TS, 0L)
@@ -216,7 +218,9 @@ class SecuritySessionRepository(
             isCurrentDevice = true
         )
         upsertLocalSession(updatedSession)
+        mirrorSessionToCloud(user.uid, updatedSession)
 
+        var createdAlertId: String? = null
         if (isFreshSignIn) {
             val alert = LoginSecurityAlert(
                 id = "alert_${UUID.randomUUID().toString().replace("-", "").take(12)}",
@@ -228,29 +232,44 @@ class SecuritySessionRepository(
                 timestampMillis = now,
                 decision = LoginAlertDecision.PENDING
             )
+            createdAlertId = alert.id
             prependLocalAlert(alert)
             onNewLoginAlert(alert)
-            mirrorAlertToCloud(alert)
+            mirrorAlertToCloud(user.uid, alert)
         }
-
-        mirrorSessionToCloud(updatedSession)
 
         // Enrich real approximate city/country in background without requesting GPS permissions
         val ipLocation = fetchIpCityCountry()
         if (ipLocation != null && ipLocation != updatedSession.location) {
-            val enrichedSession = updatedSession.copy(location = ipLocation)
+            val enrichedSession = updatedSession.copy(
+                location = ipLocation,
+                lastActiveMillis = System.currentTimeMillis()
+            )
             upsertLocalSession(enrichedSession)
-            mirrorSessionToCloud(enrichedSession)
-            if (isFreshSignIn) {
+            mirrorSessionToCloud(user.uid, enrichedSession)
+            if (createdAlertId != null) {
                 val updatedAlerts = _alerts.value.map { alert ->
-                    if (alert.sessionId == sessionId && alert.timestampMillis == now) {
+                    if (alert.id == createdAlertId) {
                         alert.copy(location = ipLocation)
                     } else alert
                 }
                 _alerts.value = updatedAlerts
                 saveLocalPrefs()
+                updateAlertLocationInCloud(createdAlertId, ipLocation)
             }
         }
+    }
+
+    suspend fun refreshHeartbeat() {
+        val user = auth.currentUser ?: return
+        val sessionId = currentSessionId(user.uid)
+        val current = _sessions.value.firstOrNull { it.id == sessionId } ?: return
+        val refreshed = current.copy(
+            lastActiveMillis = System.currentTimeMillis(),
+            status = AdminDeviceStatus.ACTIVE
+        )
+        upsertLocalSession(refreshed)
+        mirrorSessionToCloud(user.uid, refreshed)
     }
 
     fun confirmAlertIsMe(alertId: String) {
@@ -320,17 +339,16 @@ class SecuritySessionRepository(
         }.filter { it.status == AdminDeviceStatus.ACTIVE }
         saveLocalPrefs()
 
-        if (cloudSyncPermitted) {
-            runCatching {
-                db.collection(COL_ADMIN_SESSIONS).document(sessionId)
-                    .update(
-                        mapOf(
-                            "status" to AdminDeviceStatus.REVOKED.value,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
+        db.collection(COL_ADMIN_SESSIONS).document(sessionId)
+            .update(
+                mapOf(
+                    "status" to AdminDeviceStatus.REVOKED.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnFailureListener { err ->
+                handleFirestoreError(err, OperationType.UPDATE, "$COL_ADMIN_SESSIONS/$sessionId")
             }
-        }
 
         if (sessionId == currentId) {
             _isCurrentSessionRevoked.value = true
@@ -390,17 +408,25 @@ class SecuritySessionRepository(
         }
     }
 
-    fun markCurrentSessionSignedOut() {
+    suspend fun markCurrentSessionSignedOut() = withContext(NonCancellable) {
         val myId = currentSessionId()
-        if (cloudSyncPermitted) {
-            runCatching {
-                db.collection(COL_ADMIN_SESSIONS).document(myId)
-                    .update(
-                        mapOf(
-                            "status" to AdminDeviceStatus.REVOKED.value,
-                            "updatedAt" to FieldValue.serverTimestamp()
+        stopObservingCloudSecurity()
+        if (auth.currentUser != null) {
+            try {
+                withTimeoutOrNull(2500L) {
+                    db.collection(COL_ADMIN_SESSIONS).document(myId)
+                        .update(
+                            mapOf(
+                                "status" to AdminDeviceStatus.REVOKED.value,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
                         )
-                    )
+                        .await()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.UPDATE, "$COL_ADMIN_SESSIONS/$myId")
             }
         }
         _sessions.value = _sessions.value.filterNot { it.id == myId }
@@ -413,61 +439,192 @@ class SecuritySessionRepository(
         saveLocalPrefs()
     }
 
-    private fun mirrorSessionToCloud(session: ActiveDeviceSession) {
-        if (!cloudSyncPermitted) return
-        runCatching {
-            val payload = mapOf(
-                "id" to session.id,
-                "deviceId" to session.deviceId,
-                "deviceName" to session.deviceName,
-                "platform" to session.platform,
-                "email" to session.email,
-                "location" to session.location,
-                "loginAtMillis" to session.loginAtMillis,
-                "lastActiveMillis" to session.lastActiveMillis,
-                "status" to session.status.value,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            db.collection(COL_ADMIN_SESSIONS).document(session.id).set(payload)
+    private suspend fun mirrorSessionToCloud(uid: String, session: ActiveDeviceSession) {
+        val path = "$COL_ADMIN_SESSIONS/${session.id}"
+        try {
+            val docRef = db.collection(COL_ADMIN_SESSIONS).document(session.id)
+            val snapshot = docRef.get().await()
+            val cleanDeviceName = session.deviceName.trim().ifBlank { "Android Device" }.take(160)
+            val cleanPlatform = session.platform.trim().ifBlank { "Mobile App" }.take(60)
+            val cleanEmail = session.email.trim().take(254)
+            val cleanLocation = session.location.trim().ifBlank { "Unknown location" }.take(160)
+
+            if (!snapshot.exists()) {
+                val createPayload = mapOf(
+                    "id" to session.id,
+                    "uid" to uid.take(128),
+                    "deviceId" to session.deviceId.take(128),
+                    "deviceName" to cleanDeviceName,
+                    "platform" to cleanPlatform,
+                    "email" to cleanEmail,
+                    "location" to cleanLocation,
+                    "loginAtMillis" to session.loginAtMillis.coerceAtLeast(0L),
+                    "lastActiveMillis" to session.lastActiveMillis.coerceAtLeast(0L),
+                    "status" to session.status.value,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(createPayload).await()
+            } else {
+                val updatePayload = mapOf(
+                    "deviceName" to cleanDeviceName,
+                    "platform" to cleanPlatform,
+                    "email" to cleanEmail,
+                    "location" to cleanLocation,
+                    "loginAtMillis" to session.loginAtMillis.coerceAtLeast(0L),
+                    "lastActiveMillis" to session.lastActiveMillis.coerceAtLeast(0L),
+                    "status" to session.status.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.update(updatePayload).await()
+            }
+            _cloudSyncError.value = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            _cloudSyncError.value = "Unable to sync this device to cloud."
         }
     }
 
-    private fun mirrorAlertToCloud(alert: LoginSecurityAlert) {
-        if (!cloudSyncPermitted) return
-        runCatching {
+    private suspend fun mirrorAlertToCloud(uid: String, alert: LoginSecurityAlert) {
+        val path = "$COL_LOGIN_ALERTS/${alert.id}"
+        try {
             val payload = mapOf(
                 "id" to alert.id,
                 "sessionId" to alert.sessionId,
-                "email" to alert.email,
-                "deviceName" to alert.deviceName,
-                "platform" to alert.platform,
-                "location" to alert.location,
-                "timestampMillis" to alert.timestampMillis,
+                "uid" to uid.take(128),
+                "email" to alert.email.trim().take(254),
+                "deviceName" to alert.deviceName.trim().ifBlank { "Android Device" }.take(160),
+                "platform" to alert.platform.trim().ifBlank { "Mobile App" }.take(60),
+                "location" to alert.location.trim().ifBlank { "Unknown location" }.take(160),
+                "timestampMillis" to alert.timestampMillis.coerceAtLeast(0L),
                 "decision" to alert.decision.value,
-                "createdAt" to FieldValue.serverTimestamp()
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
             )
-            db.collection(COL_LOGIN_ALERTS).document(alert.id).set(payload)
+            db.collection(COL_LOGIN_ALERTS).document(alert.id).set(payload).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, path)
+        }
+    }
+
+    private suspend fun updateAlertLocationInCloud(alertId: String, location: String) {
+        if (alertId.startsWith(SYNTHETIC_ALERT_PREFIX)) return
+        val path = "$COL_LOGIN_ALERTS/$alertId"
+        try {
+            db.collection(COL_LOGIN_ALERTS).document(alertId)
+                .update(
+                    mapOf(
+                        "location" to location.trim().ifBlank { "Unknown location" }.take(160),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, path)
         }
     }
 
     private fun mirrorAlertDecisionToCloud(alert: LoginSecurityAlert) {
-        if (!cloudSyncPermitted) return
-        runCatching {
-            db.collection(COL_LOGIN_ALERTS).document(alert.id)
-                .update(mapOf("decision" to alert.decision.value))
-        }
+        if (alert.id.startsWith(SYNTHETIC_ALERT_PREFIX)) return
+        val path = "$COL_LOGIN_ALERTS/${alert.id}"
+        db.collection(COL_LOGIN_ALERTS).document(alert.id)
+            .update(
+                mapOf(
+                    "decision" to alert.decision.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnFailureListener { err ->
+                handleFirestoreError(err, OperationType.UPDATE, path)
+            }
     }
 
-    private fun mergeRemoteSessions(remote: List<ActiveDeviceSession>) {
-        val localById = _sessions.value.associateBy { it.id }.toMutableMap()
+    private fun parseRemoteSession(
+        doc: DocumentSnapshot,
+        mySessionId: String
+    ): ActiveDeviceSession? {
+        val data = doc.data ?: return null
+        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val devId = (data["deviceId"] as? String).orEmpty()
+        val status = AdminDeviceStatus.fromValue(data["status"] as? String)
+        val loginMillis = (data["loginAtMillis"] as? Number)?.toLong()
+            ?: doc.getTimestamp("loginAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: System.currentTimeMillis()
+        val activeMillis = (data["lastActiveMillis"] as? Number)?.toLong()
+            ?: doc.getTimestamp("lastActiveAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: loginMillis
+
+        if (id == mySessionId && status == AdminDeviceStatus.REVOKED) {
+            _isCurrentSessionRevoked.value = true
+        }
+
+        val resolvedDeviceName = (data["deviceName"] as? String).orEmpty().trim()
+            .ifBlank { (data["browser"] as? String).orEmpty().trim() }
+            .ifBlank { (data["userAgent"] as? String).orEmpty().trim().take(80) }
+            .ifBlank { "Admin Device" }
+
+        return ActiveDeviceSession(
+            id = id,
+            deviceId = devId,
+            deviceName = resolvedDeviceName,
+            platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website" },
+            email = (data["email"] as? String).orEmpty().trim(),
+            location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
+            loginAtMillis = loginMillis,
+            lastActiveMillis = activeMillis,
+            status = status,
+            isCurrentDevice = devId == localDeviceId || id == mySessionId
+        )
+    }
+
+    private fun parseRemoteAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
+        val data = doc.data ?: return null
+        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
+            ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: System.currentTimeMillis()
+        return LoginSecurityAlert(
+            id = id,
+            sessionId = (data["sessionId"] as? String).orEmpty(),
+            email = (data["email"] as? String).orEmpty().trim(),
+            deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Admin Device" },
+            platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website" },
+            location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
+            timestampMillis = tsMillis,
+            decision = LoginAlertDecision.fromValue(data["decision"] as? String)
+        )
+    }
+
+    private fun mergeRemoteSessions(
+        remote: List<ActiveDeviceSession>,
+        mySessionId: String
+    ) {
+        val remoteById = remote.associateBy { it.id }
+        val merged = mutableMapOf<String, ActiveDeviceSession>()
+
+        // Authoritative active sessions from Firestore
         for (item in remote) {
-            if (item.status == AdminDeviceStatus.REVOKED) {
-                localById.remove(item.id)
-            } else {
-                localById[item.id] = item
+            if (item.status == AdminDeviceStatus.ACTIVE) {
+                merged[item.id] = item
             }
         }
-        _sessions.value = localById.values
+
+        // Preserve local current-device session while initial cloud write is in flight,
+        // unless Firestore explicitly marked it REVOKED.
+        val localCurrent = _sessions.value.firstOrNull { it.id == mySessionId || it.isCurrentDevice }
+        if (localCurrent != null && !remoteById.containsKey(localCurrent.id)) {
+            merged[localCurrent.id] = localCurrent
+        }
+
+        _sessions.value = merged.values
             .filter { it.status == AdminDeviceStatus.ACTIVE }
             .sortedWith(
                 compareByDescending<ActiveDeviceSession> { it.isCurrentDevice }
@@ -477,7 +634,15 @@ class SecuritySessionRepository(
     }
 
     private fun mergeRemoteAlerts(remote: List<LoginSecurityAlert>) {
-        val byId = _alerts.value.associateBy { it.id }.toMutableMap()
+        val realSessionIds = remote.map { it.sessionId }.filter { it.isNotBlank() }.toSet()
+        val byId = _alerts.value
+            .filterNot { existing ->
+                existing.id.startsWith(SYNTHETIC_ALERT_PREFIX) &&
+                    realSessionIds.contains(existing.sessionId)
+            }
+            .associateBy { it.id }
+            .toMutableMap()
+
         for (item in remote) {
             byId[item.id] = item
         }
@@ -668,6 +833,15 @@ class SecuritySessionRepository(
         }.getOrNull()
     }
 
+    private fun sanitizeIdPart(raw: String?): String =
+        raw.orEmpty().replace(ID_SANITIZE_REGEX, "")
+
+    private fun buildSyntheticAlertId(sessionId: String, loginAtMillis: Long): String {
+        val cleanSession = sanitizeIdPart(sessionId).take(64)
+        val bucket = (loginAtMillis / 60_000L).coerceAtLeast(0L)
+        return "${SYNTHETIC_ALERT_PREFIX}${cleanSession}_$bucket"
+    }
+
     private companion object {
         const val TAG = "SecuritySessionRepo"
         const val PREFS_NAME = "alif_security_prefs"
@@ -680,5 +854,7 @@ class SecuritySessionRepository(
 
         const val COL_ADMIN_SESSIONS = "adminSessions"
         const val COL_LOGIN_ALERTS = "loginAlerts"
+        const val SYNTHETIC_ALERT_PREFIX = "sess_alert_"
+        val ID_SANITIZE_REGEX = Regex("[^a-zA-Z0-9_-]")
     }
 }

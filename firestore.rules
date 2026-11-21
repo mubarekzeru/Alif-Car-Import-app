@@ -49,6 +49,10 @@ service cloud.firestore {
       return val is string && val.size() >= minLen && val.size() <= maxLen;
     }
 
+    function isValidTimestamp(val) {
+      return val is timestamp && val <= request.time;
+    }
+
     function isValidBranding(b) {
       return b is map &&
         b.keys().hasAll(['companyName', 'logoUrl', 'tagline']) &&
@@ -110,10 +114,10 @@ service cloud.firestore {
         isValidString(c.hours, 0, 160) &&
         isValidString(c.phone, 0, 60) &&
         isValidString(c.whatsapp, 0, 200) &&
-        (!('telegram' in c) || isValidString(c.telegram, 0, 200)) &&
-        (!('instagram' in c) || isValidString(c.instagram, 0, 200)) &&
-        (!('facebook' in c) || isValidString(c.facebook, 0, 200)) &&
-        (!('x' in c) || isValidString(c.x, 0, 200)) &&
+        (!('telegram' in c) || c.telegram == null || isValidString(c.telegram, 0, 200)) &&
+        (!('instagram' in c) || c.instagram == null || isValidString(c.instagram, 0, 200)) &&
+        (!('facebook' in c) || c.facebook == null || isValidString(c.facebook, 0, 200)) &&
+        (!('x' in c) || c.x == null || isValidString(c.x, 0, 200)) &&
         isValidString(c.email, 0, 254) &&
         isValidString(c.mapsUrl, 0, 500) &&
         isValidString(c.landmarkNote, 0, 240);
@@ -126,7 +130,7 @@ service cloud.firestore {
         isValidHero(data.hero) &&
         isValidTikTokConfig(data.tiktok) &&
         isValidContact(data.contact) &&
-        data.updatedAt == request.time;
+        isValidTimestamp(data.updatedAt);
     }
 
     function isValidAdminAccessConfig(data) {
@@ -135,7 +139,7 @@ service cloud.firestore {
         data.adminEmails is list &&
         data.adminEmails.size() <= 20 &&
         (data.adminEmails.size() == 0 || (data.adminEmails[0] is string && data.adminEmails[0].size() <= 254)) &&
-        data.updatedAt == request.time;
+        isValidTimestamp(data.updatedAt);
     }
 
     function isValidAdminMembership(data) {
@@ -143,7 +147,7 @@ service cloud.firestore {
         data.keys().hasOnly(['email', 'role', 'createdAt']) &&
         isValidString(data.email, 3, 254) &&
         data.role == 'admin' &&
-        data.createdAt == request.time;
+        isValidTimestamp(data.createdAt);
     }
 
     function isValidVehicle(vehicleId, data) {
@@ -196,14 +200,14 @@ service cloud.firestore {
         isValidString(data.model, 1, 120) &&
         data.year is number && data.year >= 1950 && data.year <= 2100 &&
         data.price is number && data.price >= 0 && data.price <= 100000000 &&
-        (!('originalPrice' in data) || (data.originalPrice is number && data.originalPrice >= 0 && data.originalPrice <= 100000000)) &&
+        (!('originalPrice' in data) || data.originalPrice == null || (data.originalPrice is number && data.originalPrice >= 0 && data.originalPrice <= 100000000)) &&
         isValidString(data.mileage, 0, 60) &&
         isValidString(data.transmission, 0, 80) &&
         isValidString(data.fuelType, 0, 80) &&
         isValidString(data.color, 0, 80) &&
         isValidString(data.origin, 0, 100) &&
         isValidString(data.imageUrl, 1, 550000) &&
-        (!('galleryImages' in data) || (
+        (!('galleryImages' in data) || data.galleryImages == null || (
           data.galleryImages is list &&
           data.galleryImages.size() <= 10 &&
           (data.galleryImages.size() == 0 || (data.galleryImages[0] is string && data.galleryImages[0].size() <= 550000))
@@ -213,7 +217,7 @@ service cloud.firestore {
         data.status in ['available', 'reserved', 'sold'] &&
         data.featured is bool &&
         isValidString(data.createdAt, 1, 64) &&
-        data.updatedAt == request.time;
+        isValidTimestamp(data.updatedAt);
     }
 
     function isValidTikTokPost(postId, data) {
@@ -226,7 +230,7 @@ service cloud.firestore {
         isValidString(data.tiktokUrl, 0, 500) &&
         isValidString(data.coverImageUrl, 0, 550000) &&
         data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
-        data.updatedAt == request.time;
+        isValidTimestamp(data.updatedAt);
     }
 
     function isValidInquiry(inquiryId, data) {
@@ -236,10 +240,97 @@ service cloud.firestore {
         isValidId(data.id) &&
         isValidString(data.name, 1, 120) &&
         isValidString(data.phone, 1, 40) &&
-        (!('email' in data) || isValidString(data.email, 0, 254)) &&
+        (!('email' in data) || data.email == null || isValidString(data.email, 0, 254)) &&
         isValidString(data.vehicleTitle, 0, 200) &&
         isValidString(data.message, 1, 2000) &&
-        data.createdAt == request.time;
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidAdminSession(sessionId, data) {
+      return data.keys().hasAll([
+          'id',
+          'uid',
+          'deviceId',
+          'deviceName',
+          'platform',
+          'email',
+          'location',
+          'loginAtMillis',
+          'lastActiveMillis',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'uid',
+          'deviceId',
+          'deviceName',
+          'platform',
+          'email',
+          'location',
+          'loginAtMillis',
+          'lastActiveMillis',
+          'status',
+          'userAgent',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == sessionId &&
+        isValidId(data.id) &&
+        isValidString(data.uid, 1, 128) &&
+        isValidString(data.deviceId, 1, 128) &&
+        isValidString(data.deviceName, 1, 160) &&
+        isValidString(data.platform, 1, 60) &&
+        isValidString(data.email, 0, 254) &&
+        isValidString(data.location, 1, 160) &&
+        data.loginAtMillis is number && data.loginAtMillis >= 0 &&
+        data.lastActiveMillis is number && data.lastActiveMillis >= 0 &&
+        data.status in ['active', 'revoked'] &&
+        (!('userAgent' in data) || data.userAgent == null || isValidString(data.userAgent, 0, 300)) &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidLoginAlert(alertId, data) {
+      return data.keys().hasAll([
+          'id',
+          'sessionId',
+          'uid',
+          'email',
+          'deviceName',
+          'platform',
+          'location',
+          'timestampMillis',
+          'decision',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'sessionId',
+          'uid',
+          'email',
+          'deviceName',
+          'platform',
+          'location',
+          'timestampMillis',
+          'decision',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.id == alertId &&
+        isValidId(data.id) &&
+        isValidId(data.sessionId) &&
+        isValidString(data.uid, 1, 128) &&
+        isValidString(data.email, 0, 254) &&
+        isValidString(data.deviceName, 1, 160) &&
+        isValidString(data.platform, 1, 60) &&
+        isValidString(data.location, 1, 160) &&
+        data.timestampMillis is number && data.timestampMillis >= 0 &&
+        data.decision in ['pending', 'confirmed_me', 'rejected_not_me'] &&
+        isValidTimestamp(data.createdAt) &&
+        isValidTimestamp(data.updatedAt);
     }
 
     match /config/{configId} {
@@ -323,6 +414,84 @@ service cloud.firestore {
       allow list: if isBootstrapOwner();
       allow create: if isValidId(inquiryId) && isValidInquiry(inquiryId, incoming());
       allow update, delete: if false;
+    }
+
+    match /adminSessions/{sessionId} {
+      allow get: if isVerifiedUser() && isValidId(sessionId) && isAdmin();
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(sessionId) &&
+        isValidAdminSession(sessionId, incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().status == 'active' &&
+        isAdmin();
+      allow update: if isVerifiedUser() &&
+        isValidId(sessionId) &&
+        isValidAdminSession(sessionId, incoming()) &&
+        incoming().id == existing().id &&
+        incoming().uid == existing().uid &&
+        incoming().deviceId == existing().deviceId &&
+        incoming().createdAt == existing().createdAt &&
+        isAdmin() && (
+          // Action 1: Any authorized admin can revoke a device session
+          (
+            incoming().status == 'revoked' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Action 2: Session owner refreshes heartbeat, location, or reactivates on re-login
+          (
+            existing().uid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'deviceName',
+              'platform',
+              'email',
+              'location',
+              'loginAtMillis',
+              'lastActiveMillis',
+              'status',
+              'userAgent',
+              'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /loginAlerts/{alertId} {
+      allow get: if isVerifiedUser() && isValidId(alertId) && isAdmin();
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(alertId) &&
+        isValidLoginAlert(alertId, incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().decision == 'pending' &&
+        isAdmin();
+      allow update: if isVerifiedUser() &&
+        isValidId(alertId) &&
+        isValidLoginAlert(alertId, incoming()) &&
+        incoming().id == existing().id &&
+        incoming().sessionId == existing().sessionId &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().deviceName == existing().deviceName &&
+        incoming().platform == existing().platform &&
+        incoming().timestampMillis == existing().timestampMillis &&
+        incoming().createdAt == existing().createdAt &&
+        isAdmin() && (
+          // Action 1: Admin confirms or rejects a pending login alert
+          (
+            existing().decision == 'pending' &&
+            incoming().decision in ['confirmed_me', 'rejected_not_me'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['decision', 'updatedAt'])
+          ) ||
+          // Action 2: Creator enriches approximate city/country on their own pending alert
+          (
+            existing().uid == request.auth.uid &&
+            existing().decision == 'pending' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['location', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
     }
   }
 }

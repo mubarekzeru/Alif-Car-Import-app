@@ -1,7 +1,12 @@
 package com.example.ui.components
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.firebase.InquiriesState
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
+import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.theme.AmberReserved
 import com.example.ui.theme.AmberReservedContainer
 import com.example.ui.theme.EmeraldAvailable
@@ -98,6 +104,16 @@ fun NotificationsScreen(
     onRejectNotMe: (String) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    var hasNotificationPermission by remember {
+        mutableStateOf(SecurityNotificationHelper.hasNotificationPermission(context))
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted || SecurityNotificationHelper.hasNotificationPermission(context)
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarMessage) {
         val message = snackbarMessage ?: return@LaunchedEffect
@@ -158,6 +174,59 @@ fun NotificationsScreen(
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (!hasNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = AmberReservedContainer),
+                        border = BorderStroke(1.dp, AmberReserved.copy(alpha = 0.45f)),
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Turn on Notifications",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Allow notifications so this phone alerts you immediately when another device signs into the admin portal.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    },
+                                    shape = CircleShape,
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("enable_notifications_button")
+                                ) {
+                                    Text("Allow Alerts", fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        val settingsIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                        }
+                                        runCatching { context.startActivity(settingsIntent) }
+                                    },
+                                    shape = CircleShape,
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("open_notification_settings_button")
+                                ) {
+                                    Text("App Settings")
+                                }
+                            }
+                        }
+                    }
+                }
+
                 LoginAlertsList(
                     alerts = alerts,
                     onConfirmItWasMe = onConfirmItWasMe,

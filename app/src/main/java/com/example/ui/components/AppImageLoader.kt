@@ -51,6 +51,8 @@ object AppImageLoader {
                                 builder.header("Referer", "https://alifcarimport.com/")
                             host == "mubarekzeru.github.io" ->
                                 builder.header("Referer", "https://mubarekzeru.github.io/AlifCarImport/")
+                            com.example.data.network.TikTokThumbnailResolver.isTikTokCdnHost(host) ->
+                                builder.header("Referer", "https://www.tiktok.com/")
                         }
                     }
                     chain.proceed(builder.build())
@@ -92,6 +94,7 @@ fun ResilientAppImage(
     height: Int? = null,
     crossfadeMillis: Int = 180,
     contentScale: ContentScale = ContentScale.Crop,
+    onAllCandidatesFailed: (() -> Unit)? = null,
     fallback: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -124,7 +127,11 @@ fun ResilientAppImage(
             contentDescription = contentDescription,
             onError = {
                 if (attemptIndex < decodedCandidates.size) {
-                    attemptIndex += 1
+                    val next = attemptIndex + 1
+                    attemptIndex = next
+                    if (next >= decodedCandidates.size) {
+                        onAllCandidatesFailed?.invoke()
+                    }
                 }
             },
             modifier = modifier,

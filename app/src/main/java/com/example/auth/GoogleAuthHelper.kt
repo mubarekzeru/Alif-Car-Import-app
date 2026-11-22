@@ -73,7 +73,8 @@ fun attemptAutoSignIn(
             val credential = credentialManager.getCredential(context, request).credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                val result = Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                runCatching { (result.user ?: Firebase.auth.currentUser)?.getIdToken(true)?.await() }
                 onAuthSuccess()
             } else {
                 onUnauthenticated()
@@ -114,7 +115,8 @@ fun onGoogleSignInClicked(
             val credential = credentialManager.getCredential(activity, request).credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                val result = Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                runCatching { (result.user ?: Firebase.auth.currentUser)?.getIdToken(true)?.await() }
                 onAuthSuccess()
             } else {
                 onAuthError("Unexpected credential type received.")

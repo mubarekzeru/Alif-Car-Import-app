@@ -59,8 +59,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
+import com.example.data.network.TikTokThumbnailResolver
+import com.example.ui.theme.WarmCoralTop
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,8 +98,59 @@ fun AddEditTikTokScreen(
     var titleInput by remember(editingPost?.id) { mutableStateOf(editingPost?.title ?: "") }
     var captionInput by remember(editingPost?.id) { mutableStateOf(editingPost?.caption ?: "") }
     var tiktokUrlInput by remember(editingPost?.id) { mutableStateOf(editingPost?.tiktokUrl ?: "") }
+    var coverImageUrl by remember(editingPost?.id) { mutableStateOf(editingPost?.coverImageUrl ?: "") }
     var sortOrderInput by remember(editingPost?.id) {
         mutableStateOf((editingPost?.sortOrder ?: defaultSortOrder).toString())
+    }
+    var isFetchingCover by remember(editingPost?.id) { mutableStateOf(false) }
+    var coverStatusText by remember(editingPost?.id) {
+        mutableStateOf(
+            if (!editingPost?.coverImageUrl.isNullOrBlank()) {
+                "Cover preview loaded from TikTok"
+            } else {
+                "Paste a TikTok video link to load its cover automatically"
+            }
+        )
+    }
+    var coverRefreshNonce by remember(editingPost?.id) { mutableIntStateOf(0) }
+
+    LaunchedEffect(tiktokUrlInput, coverRefreshNonce) {
+        val normalized = TikTokThumbnailResolver.normalizeTikTokUrl(tiktokUrlInput)
+        if (normalized == null) {
+            isFetchingCover = false
+            coverStatusText = if (tiktokUrlInput.isBlank()) {
+                "Paste a TikTok video link to load its cover automatically"
+            } else {
+                "Enter a valid tiktok.com link to load the video cover"
+            }
+            return@LaunchedEffect
+        }
+
+        val forceRefresh = coverRefreshNonce > 0
+        val cached = if (!forceRefresh) TikTokThumbnailResolver.getCachedThumbnail(normalized) else null
+        if (cached != null) {
+            coverImageUrl = cached
+            isFetchingCover = false
+            coverStatusText = "Cover preview loaded from TikTok"
+            return@LaunchedEffect
+        }
+
+        if (!forceRefresh) {
+            delay(420L)
+        }
+        isFetchingCover = true
+        coverStatusText = "Fetching cover image from TikTok…"
+        val metadata = TikTokThumbnailResolver.resolveMetadata(normalized, forceRefresh = forceRefresh)
+        isFetchingCover = false
+        if (metadata != null && metadata.thumbnailUrl.isNotBlank()) {
+            coverImageUrl = metadata.thumbnailUrl
+            coverStatusText = "Cover preview loaded from TikTok"
+            if (titleInput.isBlank() && metadata.title.isNotBlank()) {
+                titleInput = metadata.title.take(200)
+            }
+        } else {
+            coverStatusText = "Couldn't preview cover yet — tap Refresh or we'll retry on save"
+        }
     }
 
     Scaffold(
@@ -135,16 +201,131 @@ fun AddEditTikTokScreen(
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                OutlinedTextField(
-                    value = titleInput,
-                    onValueChange = { if (it.length <= 200) titleInput = it },
-                    label = { Text("Video Title") },
-                    placeholder = { Text("2024 Lexus RX 350 Walkaround") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("tiktok_title_input")
-                )
+                // Live TikTok Cover Preview Card
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(92.dp)
+                                .aspectRatio(0.72f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF1A1B1E)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val previewCandidates = remember(coverImageUrl) {
+                                resolveCandidateImageUrls(coverImageUrl)
+                            }
+                            ResilientAppImage(
+                                candidateUrls = previewCandidates,
+                                contentDescription = "TikTok video cover preview",
+                                cacheKeyPrefix = "tiktok_form_preview",
+                                width = 320,
+                                height = 440,
+                                crossfadeMillis = 160,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.linearGradient(
+                                                colors = listOf(
+                                                    Color(0xFF1A1B1E),
+                                                    Color(0xFF2D2523),
+                                                    WarmCoralTop.copy(alpha = 0.72f)
+                                                )
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+
+                            if (isFetchingCover) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.45f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.5.dp
+                                    )
+                                }
+                            } else if (coverImageUrl.isNotBlank()) {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.45f),
+                                    shape = CircleShape,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier
+                                            .padding(3.dp)
+                                            .size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Video Cover Preview",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = coverStatusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (TikTokThumbnailResolver.normalizeTikTokUrl(tiktokUrlInput) != null) {
+                                TextButton(
+                                    onClick = { coverRefreshNonce += 1 },
+                                    enabled = !isFetchingCover && !isSaving,
+                                    modifier = Modifier.testTag("tiktok_refresh_cover_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Refresh Cover", fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = tiktokUrlInput,
                     onValueChange = { if (it.length <= 500) tiktokUrlInput = it },
@@ -155,6 +336,16 @@ fun AddEditTikTokScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("tiktok_url_input")
+                )
+                OutlinedTextField(
+                    value = titleInput,
+                    onValueChange = { if (it.length <= 200) titleInput = it },
+                    label = { Text("Video Title") },
+                    placeholder = { Text("2024 Lexus RX 350 Walkaround") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tiktok_title_input")
                 )
                 OutlinedTextField(
                     value = captionInput,
@@ -196,13 +387,15 @@ fun AddEditTikTokScreen(
                     Button(
                         onClick = {
                             val order = (sortOrderInput.toLongOrNull() ?: 0L).coerceIn(0L, 1000L)
+                            val cleanUrl = TikTokThumbnailResolver.normalizeTikTokUrl(tiktokUrlInput)
+                                ?: tiktokUrlInput.trim()
                             onSave(
                                 editingPost?.id,
                                 TikTokPostDraft(
                                     title = titleInput,
                                     caption = captionInput,
-                                    tiktokUrl = tiktokUrlInput,
-                                    coverImageUrl = "",
+                                    tiktokUrl = cleanUrl,
+                                    coverImageUrl = coverImageUrl,
                                     sortOrder = order
                                 )
                             )
@@ -266,17 +459,31 @@ fun TikTokPostCard(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.size(48.dp)
+                Box(
+                    modifier = Modifier
+                        .width(48.dp)
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.VideoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(12.dp)
-                    )
+                    TikTokCoverImage(
+                        postId = post.id,
+                        tiktokUrl = post.tiktokUrl,
+                        storedCoverUrl = post.coverImageUrl,
+                        contentDescription = post.title.ifBlank { "TikTok video" },
+                        cacheKeyPrefix = "tiktok_card",
+                        width = 180,
+                        height = 240,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
 
                 Column(

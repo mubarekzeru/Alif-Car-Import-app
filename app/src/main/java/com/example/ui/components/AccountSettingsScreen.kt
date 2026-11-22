@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Visibility
@@ -519,6 +520,23 @@ fun AccountSettingsScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
+                                        val browserLabel = session.resolvedBrowserLabel
+                                        if (isWebsite || !browserLabel.equals(session.platform, ignoreCase = true)) {
+                                            Text(
+                                                text = browserLabel,
+                                                fontSize = 11.sp,
+                                                lineHeight = 14.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "•",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                         Text(
                                             text = session.platform,
                                             fontSize = 11.sp,
@@ -627,15 +645,15 @@ fun AccountSettingsScreen(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Signing Out All Devices…", fontWeight = FontWeight.Bold)
+                            Text("Removing Other Devices…", fontWeight = FontWeight.Bold)
                         } else {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Logout,
+                                imageVector = Icons.Default.Devices,
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sign Out All Devices (App & Website)", fontWeight = FontWeight.Bold)
+                            Text("Remove All Other Devices (App & Website)", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -647,6 +665,12 @@ fun AccountSettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Bold
+                        )
+
+                        InstantBackgroundAlertsCard(
+                            onShowQuickFeedback = { msg ->
+                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                            }
                         )
 
                         AuthenticatorSecurityCard(
@@ -871,38 +895,6 @@ fun AccountSettingsScreen(
                             testTag = "settings_contact_social_location_row"
                         )
 
-                        Button(
-                            onClick = { showSignOutAllConfirmDialog = true },
-                            enabled = !isSigningOutAll,
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .testTag("settings_sign_out_all_devices_button")
-                        ) {
-                            if (isSigningOutAll) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = MaterialTheme.colorScheme.onError,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Signing Out All Devices…", fontWeight = FontWeight.Bold)
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Devices,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Sign Out All Devices (App & Website)", fontWeight = FontWeight.Bold)
-                            }
-                        }
-
                         OutlinedButton(
                             onClick = onSignOutClick,
                             enabled = !isSigningOutAll,
@@ -942,14 +934,14 @@ fun AccountSettingsScreen(
             containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
-                    text = "Sign Out All Devices?",
+                    text = "Remove All Other Devices?",
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "This immediately revokes all active Mobile App and Website sessions and enforces a server-side cutoff that blocks even older, un-updated app versions and browser tabs until they sign in again fresh.",
+                        text = "This immediately removes and signs out all other Mobile App and Website sessions (including older app versions and browser tabs) while keeping this phone signed in.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1006,7 +998,7 @@ fun AccountSettingsScreen(
                     modifier = Modifier.testTag("confirm_sign_out_all_devices_button")
                 ) {
                     Text(
-                        text = if (isSigningOutAll) "Verifying…" else "Sign Out All",
+                        text = if (isSigningOutAll) "Removing…" else "Remove All Others",
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -1052,6 +1044,10 @@ fun AccountSettingsScreen(
                     SettingsDetailRow(
                         icon = if (session.isWebsiteSession) Icons.Default.Language else Icons.Default.PhoneAndroid,
                         text = "Platform: ${session.platform}"
+                    )
+                    SettingsDetailRow(
+                        icon = Icons.Default.Public,
+                        text = "Browser: ${session.resolvedBrowserLabel}"
                     )
                     SettingsDetailRow(Icons.Default.Devices, "Device: ${session.deviceName}")
                     SettingsDetailRow(Icons.Default.LocationOn, "Location: ${session.location}")

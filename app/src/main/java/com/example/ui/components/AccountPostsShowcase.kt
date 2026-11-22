@@ -58,7 +58,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -81,10 +87,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.data.model.TikTokPost
 import com.example.data.model.Vehicle
+import com.example.data.network.TikTokThumbnailResolver
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.WarmAmberGlow
 import com.example.ui.theme.WarmCoralTop
@@ -156,27 +161,58 @@ fun AccountSectionSwitcherCard(
                 }
             }
 
-            // Quick toggle pill beside the switcher for effortless 1-tap switching
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Single dynamic icon + posted count pill matching the selected Inventory / TikTok Videos option
+            val activeIcon = if (selectedSection == DashboardSection.INVENTORY) {
+                Icons.Default.DirectionsCar
+            } else {
+                Icons.Default.VideoLibrary
+            }
+            val activeCount = if (selectedSection == DashboardSection.INVENTORY) {
+                vehicleCount
+            } else {
+                tikTokCount
+            }
+            val activeDescription = if (selectedSection == DashboardSection.INVENTORY) {
+                "$vehicleCount vehicles posted"
+            } else {
+                "$tikTokCount TikTok videos posted"
+            }
+
+            Surface(
+                onClick = onToggleExpand,
+                color = MaterialTheme.colorScheme.primary,
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .height(40.dp)
+                    .testTag("account_active_section_count_pill")
             ) {
-                QuickSectionChip(
-                    icon = Icons.Default.DirectionsCar,
-                    count = vehicleCount,
-                    selected = selectedSection == DashboardSection.INVENTORY,
-                    contentDescription = "Show Inventory",
-                    onClick = { onSelectSection(DashboardSection.INVENTORY) },
-                    testTag = "account_quick_inventory_chip"
-                )
-                QuickSectionChip(
-                    icon = Icons.Default.VideoLibrary,
-                    count = tikTokCount,
-                    selected = selectedSection == DashboardSection.TIKTOK_VIDEOS,
-                    contentDescription = "Show TikTok Videos",
-                    onClick = { onSelectSection(DashboardSection.TIKTOK_VIDEOS) },
-                    testTag = "account_quick_tiktok_chip"
-                )
+                AnimatedContent(
+                    targetState = Triple(activeIcon, activeCount, activeDescription),
+                    transitionSpec = {
+                        fadeIn(tween(180)) togetherWith fadeOut(tween(140))
+                    },
+                    label = "account_single_section_count_badge"
+                ) { (icon, count, description) ->
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = description,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = count.toString(),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
+                }
             }
         }
 
@@ -221,55 +257,6 @@ fun AccountSectionSwitcherCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun QuickSectionChip(
-    icon: ImageVector,
-    count: Int,
-    selected: Boolean,
-    contentDescription: String,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    val bg by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
-        animationSpec = tween(180),
-        label = "quick_chip_bg"
-    )
-    val fg by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-        animationSpec = tween(180),
-        label = "quick_chip_fg"
-    )
-    Surface(
-        onClick = onClick,
-        color = bg,
-        shape = CircleShape,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-        modifier = Modifier
-            .height(38.dp)
-            .testTag(testTag)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 11.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = fg,
-                modifier = Modifier.size(15.dp)
-            )
-            Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color = fg
-            )
         }
     }
 }
@@ -517,42 +504,204 @@ fun AccountInventoryGridCard(
 }
 
 @Composable
+fun TikTokCoverImage(
+    postId: String,
+    tiktokUrl: String,
+    storedCoverUrl: String,
+    contentDescription: String,
+    cacheKeyPrefix: String,
+    modifier: Modifier = Modifier,
+    width: Int? = 420,
+    height: Int? = 580,
+    fallback: @Composable () -> Unit
+) {
+    var resolvedCoverUrl by remember(postId, tiktokUrl) {
+        mutableStateOf(TikTokThumbnailResolver.getCachedThumbnail(tiktokUrl).orEmpty())
+    }
+    var refreshAttempted by remember(postId, tiktokUrl) { mutableStateOf(false) }
+    var forceRefreshTrigger by remember(postId, tiktokUrl) { mutableIntStateOf(0) }
+
+    val storedCandidates = remember(postId, storedCoverUrl) {
+        resolveCandidateImageUrls(storedCoverUrl)
+    }
+
+    LaunchedEffect(tiktokUrl, storedCandidates.isEmpty(), forceRefreshTrigger) {
+        if (tiktokUrl.isBlank()) return@LaunchedEffect
+        val shouldFetch = storedCandidates.isEmpty() || forceRefreshTrigger > 0
+        if (!shouldFetch) return@LaunchedEffect
+        val metadata = TikTokThumbnailResolver.resolveMetadata(
+            rawUrl = tiktokUrl,
+            forceRefresh = forceRefreshTrigger > 0
+        )
+        if (metadata != null && metadata.thumbnailUrl.isNotBlank()) {
+            resolvedCoverUrl = metadata.thumbnailUrl
+        }
+    }
+
+    val effectiveCandidates = remember(storedCandidates, resolvedCoverUrl, forceRefreshTrigger) {
+        buildList {
+            if (forceRefreshTrigger > 0 && resolvedCoverUrl.isNotBlank()) {
+                add(resolvedCoverUrl)
+            }
+            addAll(storedCandidates)
+            if (resolvedCoverUrl.isNotBlank() && !contains(resolvedCoverUrl)) {
+                add(resolvedCoverUrl)
+            }
+        }
+    }
+
+    ResilientAppImage(
+        candidateUrls = effectiveCandidates,
+        contentDescription = contentDescription,
+        cacheKeyPrefix = "${cacheKeyPrefix}_${postId}_r$forceRefreshTrigger",
+        width = width,
+        height = height,
+        crossfadeMillis = 160,
+        modifier = modifier,
+        contentScale = ContentScale.Crop,
+        onAllCandidatesFailed = {
+            if (!refreshAttempted && tiktokUrl.isNotBlank()) {
+                refreshAttempted = true
+                forceRefreshTrigger += 1
+            }
+        },
+        fallback = fallback
+    )
+}
+
+@Composable
+fun HomeTikTokShowcaseSection(
+    posts: List<TikTokPost>,
+    onCardClick: (TikTokPost) -> Unit,
+    onEditClick: (TikTokPost) -> Unit,
+    onDeleteClick: (TikTokPost) -> Unit,
+    onViewAllClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    visitorPreviewMode: Boolean = false
+) {
+    if (posts.isEmpty()) return
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("home_tiktok_showcase_section"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = CircleShape,
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.VideoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "TikTok Videos",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = CircleShape
+                ) {
+                    Text(
+                        text = posts.size.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            TextButton(
+                onClick = onViewAllClick,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.testTag("home_tiktok_see_all_button")
+            ) {
+                Text(
+                    text = "See all",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "See all TikTok videos",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(
+                items = posts,
+                key = { "home_tt_${it.id}" }
+            ) { post ->
+                TikTokInstagramGridCard(
+                    post = post,
+                    onCardClick = { onCardClick(post) },
+                    onEditClick = { onEditClick(post) },
+                    onDeleteClick = { onDeleteClick(post) },
+                    modifier = Modifier.width(128.dp),
+                    visitorPreviewMode = visitorPreviewMode
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun TikTokInstagramGridCard(
     post: TikTokPost,
     onCardClick: () -> Unit,
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visitorPreviewMode: Boolean = false
 ) {
     val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
 
-    val coverCandidates = remember(post.id, post.coverImageUrl) {
-        resolveCandidateImageUrls(post.coverImageUrl)
-    }
-
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .aspectRatio(0.75f)
+            .aspectRatio(0.72f)
             .testTag("tiktok_grid_card_${post.id}"),
         onClick = onCardClick,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            ResilientAppImage(
-                candidateUrls = coverCandidates,
+            TikTokCoverImage(
+                postId = post.id,
+                tiktokUrl = post.tiktokUrl,
+                storedCoverUrl = post.coverImageUrl,
                 contentDescription = post.title.ifBlank { "TikTok video" },
-                cacheKeyPrefix = "tiktok_grid_${post.id}",
+                cacheKeyPrefix = "tiktok_grid",
                 width = 420,
-                height = 560,
-                crossfadeMillis = 160,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                height = 580,
+                modifier = Modifier.fillMaxSize()
             ) {
-                // Sleek Instagram Reel style gradient thumbnail preview
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -568,118 +717,101 @@ fun TikTokInstagramGridCard(
                 )
             }
 
-            // Center Play badge
-            Surface(
-                color = Color.Black.copy(alpha = 0.45f),
-                shape = CircleShape,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(40.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            // Top-left order pill
-            Surface(
-                color = Color.Black.copy(alpha = 0.55f),
-                shape = CircleShape,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(6.dp)
-            ) {
-                Text(
-                    text = "#${post.sortOrder}",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                )
-            }
-
-            // Top-right three-dots menu icon
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(5.dp)
-            ) {
+            if (!visitorPreviewMode) {
+                // Top-left order pill
                 Surface(
-                    color = Color.White.copy(alpha = 0.92f),
+                    color = Color.Black.copy(alpha = 0.52f),
                     shape = CircleShape,
-                    shadowElevation = 2.dp
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
                 ) {
-                    IconButton(
-                        onClick = { menuExpanded = true },
-                        modifier = Modifier
-                            .size(30.dp)
-                            .testTag("tiktok_menu_${post.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "TikTok video options",
-                            tint = Color(0xFF16171A),
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Edit", fontWeight = FontWeight.SemiBold) },
-                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onEditClick()
-                        },
-                        modifier = Modifier.testTag("tiktok_edit_option_${post.id}")
+                    Text(
+                        text = "#${post.sortOrder}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )
-                    if (post.tiktokUrl.isNotBlank()) {
+                }
+
+                // Top-right three-dots menu icon
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(5.dp)
+                ) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.92f),
+                        shape = CircleShape,
+                        shadowElevation = 2.dp
+                    ) {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("tiktok_menu_${post.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "TikTok video options",
+                                tint = Color(0xFF16171A),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
                         DropdownMenuItem(
-                            text = { Text("Open TikTok Link") },
+                            text = { Text("Edit", fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onEditClick()
+                            },
+                            modifier = Modifier.testTag("tiktok_edit_option_${post.id}")
+                        )
+                        if (post.tiktokUrl.isNotBlank()) {
+                            DropdownMenuItem(
+                                text = { Text("Open TikTok Link") },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    runCatching {
+                                        val rawUrl = post.tiktokUrl.trim()
+                                        val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                                            rawUrl
+                                        } else {
+                                            "https://$rawUrl"
+                                        }
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
+                                    }
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
                             },
                             onClick = {
                                 menuExpanded = false
-                                runCatching {
-                                    val rawUrl = post.tiktokUrl.trim()
-                                    val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                                        rawUrl
-                                    } else {
-                                        "https://$rawUrl"
-                                    }
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
-                                }
+                                onDeleteClick()
                             }
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text("Remove", color = MaterialTheme.colorScheme.error) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.DeleteOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onDeleteClick()
-                        }
-                    )
                 }
             }
 
-            // Bottom gradient title & caption scrim
+            // Bottom TikTok-style gradient scrim with play indicator and title
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -692,17 +824,28 @@ fun TikTokInstagramGridCard(
                             )
                         )
                     )
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .padding(horizontal = 7.dp, vertical = 7.dp)
             ) {
-                Text(
-                    text = post.title.ifBlank { "TikTok Video" },
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = post.title.ifBlank { "TikTok Video" },
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -781,12 +924,10 @@ fun TikTokPostDetailDialog(
     handle: String,
     onDismiss: () -> Unit,
     onEditClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    visitorPreviewMode: Boolean = false
 ) {
     val context = LocalContext.current
-    val coverCandidates = remember(post.id, post.coverImageUrl) {
-        resolveCandidateImageUrls(post.coverImageUrl)
-    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -806,15 +947,17 @@ fun TikTokPostDetailDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(210.dp)
+                        .height(260.dp)
                 ) {
-                    ResilientAppImage(
-                        candidateUrls = coverCandidates,
-                        contentDescription = post.title,
-                        cacheKeyPrefix = "tiktok_detail_${post.id}",
-                        crossfadeMillis = 160,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                    TikTokCoverImage(
+                        postId = post.id,
+                        tiktokUrl = post.tiktokUrl,
+                        storedCoverUrl = post.coverImageUrl,
+                        contentDescription = post.title.ifBlank { "TikTok video" },
+                        cacheKeyPrefix = "tiktok_detail",
+                        width = 720,
+                        height = 960,
+                        modifier = Modifier.fillMaxSize()
                     ) {
                         Box(
                             modifier = Modifier
@@ -831,20 +974,22 @@ fun TikTokPostDetailDialog(
                         )
                     }
 
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(14.dp)
-                    ) {
-                        Text(
-                            text = "Order #${post.sortOrder}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
+                    if (!visitorPreviewMode) {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.55f),
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(14.dp)
+                        ) {
+                            Text(
+                                text = "Order #${post.sortOrder}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
                     }
 
                     Surface(
@@ -946,30 +1091,9 @@ fun TikTokPostDetailDialog(
 
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            onClick = onDeleteClick,
-                            color = MaterialTheme.colorScheme.surface,
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
-                                    contentDescription = "Delete TikTok video",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
+                    if (visitorPreviewMode) {
                         if (post.tiktokUrl.isNotBlank()) {
-                            OutlinedButton(
+                            Button(
                                 onClick = {
                                     runCatching {
                                         val rawUrl = post.tiktokUrl.trim()
@@ -982,9 +1106,12 @@ fun TikTokPostDetailDialog(
                                     }
                                 },
                                 shape = CircleShape,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .fillMaxWidth()
                                     .height(48.dp)
                             ) {
                                 Icon(
@@ -993,29 +1120,81 @@ fun TikTokPostDetailDialog(
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Open", fontWeight = FontWeight.SemiBold)
+                                Text("Watch on TikTok", fontWeight = FontWeight.Bold)
                             }
                         }
-
-                        Button(
-                            onClick = onEditClick,
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("tiktok_detail_edit_button")
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Edit", fontWeight = FontWeight.Bold)
+                            Surface(
+                                onClick = onDeleteClick,
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = "Delete TikTok video",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            if (post.tiktokUrl.isNotBlank()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        runCatching {
+                                            val rawUrl = post.tiktokUrl.trim()
+                                            val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+                                                rawUrl
+                                            } else {
+                                                "https://$rawUrl"
+                                            }
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
+                                        }
+                                    },
+                                    shape = CircleShape,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Open", fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            Button(
+                                onClick = onEditClick,
+                                shape = CircleShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("tiktok_detail_edit_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Edit", fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

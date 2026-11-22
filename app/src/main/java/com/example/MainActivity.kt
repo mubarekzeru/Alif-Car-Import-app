@@ -91,6 +91,7 @@ import com.example.ui.components.ContactSocialLocationScreen
 import com.example.ui.components.NotificationCenterTab
 import com.example.ui.components.NotificationsScreen
 import com.example.ui.components.QuickPriceEditScreen
+import com.example.ui.notifications.AdminAlertMonitorService
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.VehicleDetailScreen
@@ -239,6 +240,7 @@ fun LotPulseApp(
     LaunchedEffect(adminAuthState) {
         if (adminAuthState is AdminAuthorizationState.SessionExpired) {
             skipAutoSignIn = true
+            AdminAlertMonitorService.stop(context)
             signOut(credentialManager = credentialManager, scope = scope)
         }
     }
@@ -267,7 +269,6 @@ fun LotPulseApp(
                 onAuthSuccess = {
                     skipAutoSignIn = false
                     authRefreshTick++
-                    adminCheckTick++
                 },
                 skipAutoSignIn = skipAutoSignIn
             )
@@ -286,6 +287,7 @@ fun LotPulseApp(
                     onRetry = { adminCheckTick++ },
                     onSignOut = {
                         skipAutoSignIn = true
+                        AdminAlertMonitorService.stop(context)
                         signOut(credentialManager = credentialManager, scope = scope)
                     }
                 )
@@ -427,6 +429,7 @@ private fun AuthenticatedLotAdmin(
 
     LaunchedEffect(activeUser.uid) {
         portalViewModel.registerAuthenticatedSession(activeUser)
+        AdminAlertMonitorService.startIfEnabled(context)
     }
 
     LaunchedEffect(requestedNotificationTab) {
@@ -452,6 +455,7 @@ private fun AuthenticatedLotAdmin(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 portalViewModel.refreshSessionHeartbeat()
+                AdminAlertMonitorService.startIfEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -464,6 +468,7 @@ private fun AuthenticatedLotAdmin(
     LaunchedEffect(isSessionRevoked) {
         if (isSessionRevoked) {
             onWillSignOut()
+            AdminAlertMonitorService.stop(context)
             portalViewModel.prepareSignOut()
             signOut(credentialManager = credentialManager, scope = scope)
         }
@@ -702,6 +707,7 @@ private fun AuthenticatedLotAdmin(
                 },
                 onSignOutClick = {
                     onWillSignOut()
+                    AdminAlertMonitorService.stop(context)
                     scope.launch {
                         portalViewModel.prepareSignOut()
                         signOut(credentialManager = credentialManager, scope = scope)
@@ -714,12 +720,8 @@ private fun AuthenticatedLotAdmin(
                 isSigningOutAll = isSigningOutAll,
                 onSignOutAllDevicesClick = { totpCode, onResult ->
                     scope.launch {
-                        val result = portalViewModel.prepareSignOutAllDevices(totpCode)
+                        val result = portalViewModel.removeAllOtherActiveDevices(totpCode)
                         onResult(result)
-                        if (result.isSuccess) {
-                            onWillSignOut()
-                            signOut(credentialManager = credentialManager, scope = scope)
-                        }
                     }
                 },
                 authenticatorStatus = authenticatorStatus,

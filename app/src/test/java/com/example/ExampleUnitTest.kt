@@ -355,6 +355,65 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun activeDeviceSession_resolvesBrowserNamesFromUserAgentAndDeviceInfo() {
+        val resolve = com.example.data.model.ActiveDeviceSession.Companion::resolveBrowserName
+        assertEquals(
+            "Google Chrome",
+            resolve(
+                null,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Windows PC",
+                "Website"
+            )
+        )
+        assertEquals(
+            "Microsoft Edge",
+            resolve(
+                null,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0",
+                "Windows PC",
+                "Website"
+            )
+        )
+        assertEquals(
+            "Safari",
+            resolve(
+                null,
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                "iPhone",
+                "Website"
+            )
+        )
+        assertEquals(
+            "Samsung Internet",
+            resolve(
+                null,
+                "Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Mobile Safari/537.36",
+                "Samsung Phone",
+                "Website"
+            )
+        )
+        assertEquals(
+            "Firefox",
+            resolve(
+                null,
+                null,
+                "Firefox on macOS",
+                "Website"
+            )
+        )
+        assertEquals(
+            "Mobile App",
+            resolve(
+                null,
+                null,
+                "Samsung SM-M166P (Android 16)",
+                "Mobile App"
+            )
+        )
+    }
+
+    @Test
     fun totpAuthenticator_matchesRfc6238AndGoogleAuthenticatorFormat() {
         // Official RFC 6238 HMAC-SHA1 test secret "12345678901234567890" in Base32
         val rfcSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
@@ -377,5 +436,66 @@ class ExampleUnitTest {
         )
         assertTrue(uri.startsWith("otpauth://totp/Alif%20Car%20Import:alifcarimports%40gmail.com?secret=$generated"))
         assertTrue(uri.contains("&issuer=Alif%20Car%20Import&algorithm=SHA1&digits=6&period=30"))
+    }
+
+    @Test
+    fun tikTokThumbnailResolver_normalizesLinksAndParsesCoverMetadata() {
+        val resolver = com.example.data.network.TikTokThumbnailResolver
+
+        // Accepts canonical, short, bare, and share-text TikTok links
+        assertEquals(
+            "https://www.tiktok.com/@alifcarimport/video/7412345678901234567",
+            resolver.normalizeTikTokUrl("https://www.tiktok.com/@alifcarimport/video/7412345678901234567")
+        )
+        assertEquals(
+            "https://vm.tiktok.com/ZM8abc123/",
+            resolver.normalizeTikTokUrl("Check out this car! https://vm.tiktok.com/ZM8abc123/")
+        )
+        assertEquals(
+            "https://vt.tiktok.com/ZS2xyz999/",
+            resolver.normalizeTikTokUrl("vt.tiktok.com/ZS2xyz999/")
+        )
+
+        // Rejects non-TikTok hosts, credentials, and blank strings
+        assertEquals(null, resolver.normalizeTikTokUrl(""))
+        assertEquals(null, resolver.normalizeTikTokUrl("https://evil.com/tiktok.com/video/1"))
+        assertEquals(null, resolver.normalizeTikTokUrl("https://faketiktok.com/video/1"))
+        assertEquals(null, resolver.normalizeTikTokUrl("https://user:pass@www.tiktok.com/@a/video/1"))
+        assertEquals(null, resolver.normalizeTikTokUrl("http://127.0.0.1/video/1"))
+
+        // Parses oEmbed JSON with escaped slashes and unicode ampersands
+        val sampleOEmbed = """
+            {
+              "version": "1.0",
+              "type": "video",
+              "title": "BYD Leopard 5 Arrival #alifcarimport",
+              "author_name": "Alif Car Import",
+              "thumbnail_url": "https:\/\/p16-sign-va.tiktokcdn.com\/obj\/tos-maliva-p-0068\/cover.jpeg?x-expires=1799999999\u0026x-signature=abc123"
+            }
+        """.trimIndent()
+        val parsed = resolver.parseOEmbedJson(sampleOEmbed)
+        assertEquals(
+            "https://p16-sign-va.tiktokcdn.com/obj/tos-maliva-p-0068/cover.jpeg?x-expires=1799999999&x-signature=abc123",
+            parsed?.thumbnailUrl
+        )
+        assertEquals("BYD Leopard 5 Arrival #alifcarimport", parsed?.title)
+        assertEquals("Alif Car Import", parsed?.authorName)
+
+        // Parses OpenGraph fallback HTML
+        val sampleHtml = """
+            <html><head>
+              <meta property="og:image" content="https://p16-sign-sg.tiktokcdn.com/cover.jpg?a=1&amp;b=2" />
+            </head></html>
+        """.trimIndent()
+        val parsedHtml = resolver.extractCoverFromHtml(sampleHtml)
+        assertEquals(
+            "https://p16-sign-sg.tiktokcdn.com/cover.jpg?a=1&b=2",
+            parsedHtml?.thumbnailUrl
+        )
+
+        // Recognizes TikTok CDN hosts for Referer injection
+        assertTrue(resolver.isTikTokCdnHost("p16-sign-va.tiktokcdn.com"))
+        assertTrue(resolver.isTikTokCdnHost("p19-pu-sign-useast8.tiktokcdn-us.com"))
+        assertFalse(resolver.isTikTokCdnHost("example.com"))
     }
 }

@@ -21,6 +21,7 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
@@ -29,6 +30,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -76,8 +79,17 @@ class SecuritySessionRepository(
     private var securityPolicyListener: ListenerRegistration? = null
     private var authenticatorListener: ListenerRegistration? = null
     private var activeAlertCallback: ((LoginSecurityAlert) -> Unit)? = null
+    private val sessionWriteMutex = Mutex()
     @Volatile
     private var currentAuthTimeMillis: Long = 0L
+    @Volatile
+    private var isRegisteringCurrentSession: Boolean = false
+    @Volatile
+    private var hasCompletedInitialRegistration: Boolean = false
+    @Volatile
+    private var lastHeartbeatSyncedAtMillis: Long = 0L
+    @Volatile
+    private var currentSessionActivatedAtMillis: Long = 0L
     @Volatile
     private var activeTotpSecret: String = ""
     @Volatile
@@ -116,9 +128,10 @@ class SecuritySessionRepository(
                     }
                     if (snapshot == null) return@addSnapshotListener
                     _cloudSyncError.value = null
+                    val isFromCache = snapshot.metadata.isFromCache
 
                     val remoteList = snapshot.documents.mapNotNull { doc ->
-                        parseRemoteSession(doc, mySessionId)
+                        parseRemoteSession(doc, mySessionId, isFromCache = isFromCache)
                     }
 
                     val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
@@ -180,14 +193,15 @@ class SecuritySessionRepository(
                         return@addSnapshotListener
                     }
                     if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                    val cutoffMillis = snapshot.getTimestamp(
+                    if (isRegisteringCurrentSession || snapshot.metadata.isFromCache) return@addSnapshotListener
+                    val cutoffSeconds = snapshot.getTimestamp(
                         "forceSignOutBefore",
-                        com.google.firebase.firestore.DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )?.toDate()?.time ?: return@addSnapshotListener
-                    val authTime = currentAuthTimeMillis.takeIf { it > 0L }
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )?.seconds ?: return@addSnapshotListener
+                    val authTimeSeconds = (currentAuthTimeMillis.takeIf { it > 0L }
                         ?: auth.currentUser?.metadata?.lastSignInTimestamp
-                        ?: 0L
-                    if (authTime > 0L && authTime < cutoffMillis) {
+                        ?: 0L) / 1000L
+                    if (authTimeSeconds > 0L && authTimeSeconds < cutoffSeconds) {
                         _isCurrentSessionRevoked.value = true
                     }
                 }
@@ -222,13 +236,17 @@ class SecuritySessionRepository(
         user: FirebaseUser,
         onNewLoginAlert: (LoginSecurityAlert) -> Unit
     ) {
+        isRegisteringCurrentSession = true
         _isCurrentSessionRevoked.value = false
         val sessionId = currentSessionId(user.uid)
         val deviceName = buildDeviceDisplayName()
         val email = user.email.orEmpty().trim()
         val now = System.currentTimeMillis()
+        currentSessionActivatedAtMillis = now
         val authSignInTs = user.metadata?.lastSignInTimestamp ?: 0L
         val tokenAuthTimeMillis = runCatching {
+            user.getIdToken(true).await().authTimestamp * 1000L
+        }.recoverCatching {
             user.getIdToken(false).await().authTimestamp * 1000L
         }.getOrDefault(0L)
         currentAuthTimeMillis = tokenAuthTimeMillis.takeIf { it > 0L } ?: authSignInTs
@@ -272,10 +290,23 @@ class SecuritySessionRepository(
             loginAtMillis = loginAt,
             lastActiveMillis = now,
             status = AdminDeviceStatus.ACTIVE,
-            isCurrentDevice = true
+            isCurrentDevice = true,
+            browser = "Mobile App"
         )
         upsertLocalSession(updatedSession)
-        mirrorSessionToCloud(user.uid, updatedSession)
+        try {
+            mirrorSessionToCloud(user.uid, updatedSession)
+            if (!_isCurrentSessionRevoked.value) {
+                val syncedAt = System.currentTimeMillis()
+                currentSessionActivatedAtMillis = syncedAt
+                lastHeartbeatSyncedAtMillis = syncedAt
+                hasCompletedInitialRegistration = true
+            }
+        } finally {
+            isRegisteringCurrentSession = false
+        }
+
+        if (_isCurrentSessionRevoked.value) return
 
         var createdAlertId: String? = null
         if (isFreshSignIn) {
@@ -319,10 +350,17 @@ class SecuritySessionRepository(
 
     suspend fun refreshHeartbeat() {
         val user = auth.currentUser ?: return
+        if (isRegisteringCurrentSession || !hasCompletedInitialRegistration || _isCurrentSessionRevoked.value) {
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastHeartbeatSyncedAtMillis < HEARTBEAT_MIN_INTERVAL_MILLIS) {
+            return
+        }
         val sessionId = currentSessionId(user.uid)
         val current = _sessions.value.firstOrNull { it.id == sessionId } ?: return
         val refreshed = current.copy(
-            lastActiveMillis = System.currentTimeMillis(),
+            lastActiveMillis = now,
             status = AdminDeviceStatus.ACTIVE
         )
         upsertLocalSession(refreshed)
@@ -890,94 +928,110 @@ class SecuritySessionRepository(
             .apply()
         _currentLoginAtMillis.value = 0L
         _isCurrentSessionRevoked.value = false
+        currentAuthTimeMillis = 0L
+        currentSessionActivatedAtMillis = 0L
+        lastHeartbeatSyncedAtMillis = 0L
+        hasCompletedInitialRegistration = false
+        isRegisteringCurrentSession = false
         saveLocalPrefs()
     }
 
-    suspend fun revokeAllActiveSessionsAndSignOut(totpCode: String = ""): Result<Int> = withContext(NonCancellable) {
-        val totpCheck = verifyProtectedActionTotp(totpCode, "sign out all active devices")
+    suspend fun revokeAllOtherActiveSessions(totpCode: String = ""): Result<Int> {
+        val currentUser = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before managing active devices."))
+
+        val totpCheck = verifyProtectedActionTotp(totpCode, "remove all other active devices")
         if (totpCheck.isFailure) {
-            return@withContext Result.failure(
+            return Result.failure(
                 totpCheck.exceptionOrNull()
                     ?: IllegalArgumentException("Google Authenticator code is required.")
             )
         }
 
-        val currentUser = auth.currentUser
-        val myId = currentSessionId(currentUser?.uid)
-        stopObservingCloudSecurity()
-
+        val myId = currentSessionId(currentUser.uid)
         var revokedCount = 0
         var lastError: Exception? = null
 
-        if (currentUser != null) {
-            try {
-                val snapshot = withTimeoutOrNull(6000L) {
-                    runCatching {
-                        db.collection(COL_ADMIN_SESSIONS).get(Source.SERVER).await()
-                    }.getOrElse {
-                        db.collection(COL_ADMIN_SESSIONS).get().await()
-                    }
+        try {
+            val snapshot = withTimeoutOrNull(6000L) {
+                runCatching {
+                    db.collection(COL_ADMIN_SESSIONS).get(Source.SERVER).await()
+                }.getOrElse {
+                    db.collection(COL_ADMIN_SESSIONS).get().await()
                 }
+            }
 
-                val targetRefs = snapshot?.documents
-                    ?.filter { doc ->
-                        val status = (doc.getString("status") ?: "").trim().lowercase()
+            // Revoke ALL other active Mobile App and Website sessions EXCEPT this current device
+            val otherTargetRefs = snapshot?.documents
+                ?.filter { doc ->
+                    val status = (doc.getString("status") ?: "").trim().lowercase()
+                    val devId = doc.getString("deviceId").orEmpty()
+                    doc.id != myId &&
+                        devId != localDeviceId &&
                         status != AdminDeviceStatus.REVOKED.value
-                    }
-                    ?.map { it.reference }
-                    ?.toMutableList()
-                    ?: mutableListOf()
-
-                if (targetRefs.none { it.id == myId } && snapshot?.documents?.any { it.id == myId } == true) {
-                    targetRefs.add(db.collection(COL_ADMIN_SESSIONS).document(myId))
                 }
+                ?.map { it.reference }
+                .orEmpty()
 
-                val payload = mapOf(
-                    "status" to AdminDeviceStatus.REVOKED.value,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            val payload = mapOf(
+                "status" to AdminDeviceStatus.REVOKED.value,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
 
-                targetRefs.chunked(50).forEach { chunk ->
-                    val batch = db.batch()
-                    chunk.forEach { ref -> batch.update(ref, payload) }
-                    withTimeoutOrNull(6000L) {
-                        batch.commit().await()
-                    }
-                    revokedCount += chunk.size
-                }
-
-                // Write server-side global cutoff timestamp so Firestore Security Rules immediately block
-                // ALL pre-existing sessions—including older, un-updated APKs and stale website browser tabs—
-                // until they sign in again with a fresh Firebase Auth token (auth_time >= forceSignOutBefore).
-                val securityPayload = mapOf(
-                    "forceSignOutBefore" to FieldValue.serverTimestamp(),
-                    "triggeredByEmail" to currentUser.email.orEmpty().trim().take(254),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            otherTargetRefs.chunked(50).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { ref -> batch.update(ref, payload) }
                 withTimeoutOrNull(6000L) {
+                    batch.commit().await()
+                }
+                revokedCount += chunk.size
+            }
+
+            // Advance server-side cutoff safely to this phone's own auth_time (whole seconds)
+            // so pre-existing older/un-updated APKs & stale tabs are blocked by Firestore Rules
+            // while THIS current phone stays logged in seamlessly (auth_time * 1000 >= cutoff).
+            val myAuthSeconds = runCatching {
+                currentUser.getIdToken(false).await().authTimestamp
+            }.getOrDefault(currentAuthTimeMillis / 1000L)
+
+            if (myAuthSeconds > 0L) {
+                currentAuthTimeMillis = myAuthSeconds * 1000L
+                val existingCutoffSeconds = runCatching {
                     db.collection(COL_CONFIG)
                         .document(DOC_SECURITY)
-                        .set(securityPayload)
+                        .get(Source.SERVER)
                         .await()
+                        .getTimestamp("forceSignOutBefore")
+                        ?.seconds
+                        ?: 0L
+                }.getOrDefault(0L)
+
+                if (myAuthSeconds > existingCutoffSeconds) {
+                    val securityPayload = mapOf(
+                        "forceSignOutBefore" to Timestamp(myAuthSeconds, 0),
+                        "triggeredByEmail" to currentUser.email.orEmpty().trim().take(254),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    withTimeoutOrNull(6000L) {
+                        db.collection(COL_CONFIG)
+                            .document(DOC_SECURITY)
+                            .set(securityPayload)
+                            .await()
+                    }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                lastError = e
-                handleFirestoreError(e, OperationType.UPDATE, COL_ADMIN_SESSIONS)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            lastError = e
+            handleFirestoreError(e, OperationType.UPDATE, COL_ADMIN_SESSIONS)
         }
 
-        _sessions.value = emptyList()
-        prefs.edit()
-            .remove(KEY_LOGIN_AT_MILLIS)
-            .remove(KEY_LAST_AUTH_SIGNIN_TS)
-            .apply()
-        _currentLoginAtMillis.value = 0L
-        _isCurrentSessionRevoked.value = false
+        // Keep only the current device active in local state
+        _sessions.value = _sessions.value.filter { it.id == myId || it.isCurrentDevice }
         saveLocalPrefs()
 
-        if (lastError != null && revokedCount == 0) {
+        return if (lastError != null && revokedCount == 0) {
             Result.failure(lastError)
         } else {
             Result.success(revokedCount)
@@ -985,52 +1039,177 @@ class SecuritySessionRepository(
     }
 
     private suspend fun mirrorSessionToCloud(uid: String, session: ActiveDeviceSession) {
-        val path = "$COL_ADMIN_SESSIONS/${session.id}"
-        try {
-            val docRef = db.collection(COL_ADMIN_SESSIONS).document(session.id)
-            val snapshot = docRef.get().await()
-            val cleanDeviceName = session.deviceName.trim().ifBlank { "Android Device" }.take(160)
-            val cleanPlatform = session.platform.trim().ifBlank { "Mobile App" }.take(60)
-            val cleanEmail = session.email.trim().take(254)
-            val cleanLocation = session.location.trim().ifBlank { "Unknown location" }.take(160)
-
-            if (!snapshot.exists()) {
-                val createPayload = mapOf(
-                    "id" to session.id,
-                    "uid" to uid.take(128),
-                    "deviceId" to session.deviceId.take(128),
-                    "deviceName" to cleanDeviceName,
-                    "platform" to cleanPlatform,
-                    "email" to cleanEmail,
-                    "location" to cleanLocation,
-                    "loginAtMillis" to session.loginAtMillis.coerceAtLeast(0L),
-                    "lastActiveMillis" to session.lastActiveMillis.coerceAtLeast(0L),
-                    "status" to session.status.value,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.set(createPayload).await()
-            } else {
-                val updatePayload = mapOf(
-                    "deviceName" to cleanDeviceName,
-                    "platform" to cleanPlatform,
-                    "email" to cleanEmail,
-                    "location" to cleanLocation,
-                    "loginAtMillis" to session.loginAtMillis.coerceAtLeast(0L),
-                    "lastActiveMillis" to session.lastActiveMillis.coerceAtLeast(0L),
-                    "status" to session.status.value,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.update(updatePayload).await()
+        sessionWriteMutex.withLock {
+            val currentUser = auth.currentUser
+            if (currentUser == null || currentUser.uid != uid || _isCurrentSessionRevoked.value) {
+                return@withLock
             }
-            _cloudSyncError.value = null
+            val path = "$COL_ADMIN_SESSIONS/${session.id}"
+            try {
+                writeSessionToServerOnce(uid, session)
+                lastHeartbeatSyncedAtMillis = System.currentTimeMillis()
+                _cloudSyncError.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val firestoreError = unwrapFirestoreException(e)
+                if (firestoreError?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    // Refresh JWT token and check global forceSignOutBefore cutoff (always readable by isAdminIdentity()).
+                    val freshAuthSeconds = runCatching {
+                        currentUser.getIdToken(true).await().authTimestamp
+                    }.getOrDefault(0L)
+                    if (freshAuthSeconds > 0L) {
+                        currentAuthTimeMillis = freshAuthSeconds * 1000L
+                    }
+                    val serverCutoffSeconds = runCatching {
+                        db.collection(COL_CONFIG)
+                            .document(DOC_SECURITY)
+                            .get(Source.SERVER)
+                            .await()
+                            .getTimestamp("forceSignOutBefore")
+                            ?.seconds
+                    }.getOrNull()
+
+                    val effectiveAuthSeconds = freshAuthSeconds.takeIf { it > 0L }
+                        ?: (currentAuthTimeMillis / 1000L)
+                    if (serverCutoffSeconds != null &&
+                        effectiveAuthSeconds > 0L &&
+                        effectiveAuthSeconds < serverCutoffSeconds
+                    ) {
+                        _isCurrentSessionRevoked.value = true
+                        _cloudSyncError.value = null
+                        return@withLock
+                    }
+
+                    // Token may have just refreshed; retry write once before surfacing error.
+                    try {
+                        writeSessionToServerOnce(uid, session)
+                        lastHeartbeatSyncedAtMillis = System.currentTimeMillis()
+                        _cloudSyncError.value = null
+                        return@withLock
+                    } catch (retryError: CancellationException) {
+                        throw retryError
+                    } catch (retryError: Exception) {
+                        handleFirestoreError(retryError, OperationType.WRITE, path)
+                        _cloudSyncError.value = "Unable to sync this device to cloud."
+                        return@withLock
+                    }
+                }
+                if (firestoreError?.code == FirebaseFirestoreException.Code.UNAVAILABLE) {
+                    // Offline transient failure: avoid noisy error banner while offline.
+                    return@withLock
+                }
+                handleFirestoreError(e, OperationType.WRITE, path)
+                _cloudSyncError.value = "Unable to sync this device to cloud."
+            }
+        }
+    }
+
+    private suspend fun writeSessionToServerOnce(uid: String, session: ActiveDeviceSession) {
+        val docRef = db.collection(COL_ADMIN_SESSIONS).document(session.id)
+        val cleanUid = uid.take(128)
+        val cleanDeviceId = session.deviceId.take(128)
+        val cleanDeviceName = session.deviceName.trim().ifBlank { "Android Device" }.take(160)
+        val cleanPlatform = session.platform.trim().ifBlank { "Mobile App" }.take(60)
+        val cleanEmail = session.email.trim().take(254)
+        val cleanLocation = session.location.trim().ifBlank { "Unknown location" }.take(160)
+        val cleanLoginAt = session.loginAtMillis.coerceAtLeast(0L)
+        val cleanLastActive = session.lastActiveMillis.coerceAtLeast(0L)
+
+        val updatePayload = mapOf(
+            "deviceName" to cleanDeviceName,
+            "platform" to cleanPlatform,
+            "email" to cleanEmail,
+            "location" to cleanLocation,
+            "loginAtMillis" to cleanLoginAt,
+            "lastActiveMillis" to cleanLastActive,
+            "status" to session.status.value,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+
+        val snapshot = try {
+            docRef.get(Source.SERVER).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, path)
-            _cloudSyncError.value = "Unable to sync this device to cloud."
+            val firestoreError = unwrapFirestoreException(e)
+            if (firestoreError?.code == FirebaseFirestoreException.Code.UNAVAILABLE) {
+                // Offline: only issue a safe partial update if cache confirms the doc exists;
+                // never blindly issue set() with createdAt = serverTimestamp() while server state is unknown.
+                val cached = runCatching { docRef.get(Source.CACHE).await() }.getOrNull()
+                if (cached != null && cached.exists() && isConformantOwnedSessionDoc(cached, session.id, cleanUid, cleanDeviceId)) {
+                    docRef.update(updatePayload).await()
+                }
+                return
+            }
+            throw e
+        }
+
+        if (!snapshot.exists()) {
+            val createPayload = mapOf(
+                "id" to session.id,
+                "uid" to cleanUid,
+                "deviceId" to cleanDeviceId,
+                "deviceName" to cleanDeviceName,
+                "platform" to cleanPlatform,
+                "email" to cleanEmail,
+                "location" to cleanLocation,
+                "loginAtMillis" to cleanLoginAt,
+                "lastActiveMillis" to cleanLastActive,
+                "status" to session.status.value,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(createPayload).await()
+        } else if (isConformantOwnedSessionDoc(snapshot, session.id, cleanUid, cleanDeviceId)) {
+            docRef.update(updatePayload).await()
+        } else if (snapshot.getString("uid") == cleanUid) {
+            // Safely repair an older/legacy session document owned by this same admin
+            // while strictly preserving any existing valid createdAt timestamp and deviceId.
+            val preservedCreatedAt: Any = snapshot.getTimestamp("createdAt") ?: FieldValue.serverTimestamp()
+            val preservedDeviceId = snapshot.getString("deviceId")?.trim()?.takeIf { it.isNotEmpty() }?.take(128)
+                ?: cleanDeviceId
+            val repairPayload = mapOf(
+                "id" to session.id,
+                "uid" to cleanUid,
+                "deviceId" to preservedDeviceId,
+                "deviceName" to cleanDeviceName,
+                "platform" to cleanPlatform,
+                "email" to cleanEmail,
+                "location" to cleanLocation,
+                "loginAtMillis" to cleanLoginAt,
+                "lastActiveMillis" to cleanLastActive,
+                "status" to session.status.value,
+                "createdAt" to preservedCreatedAt,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(repairPayload).await()
+        } else {
+            // Document exists but belongs to a different uid; attempt normal update only if valid.
+            docRef.update(updatePayload).await()
         }
     }
+
+    private fun isConformantOwnedSessionDoc(
+        snapshot: DocumentSnapshot,
+        expectedId: String,
+        expectedUid: String,
+        expectedDeviceId: String
+    ): Boolean {
+        val data = snapshot.data ?: return false
+        val keys = data.keys
+        if (!keys.containsAll(REQUIRED_SESSION_KEYS)) return false
+        if (!ALLOWED_SESSION_KEYS.containsAll(keys)) return false
+        return snapshot.getString("id") == expectedId &&
+            snapshot.getString("uid") == expectedUid &&
+            snapshot.getString("deviceId") == expectedDeviceId &&
+            snapshot.getTimestamp("createdAt") != null
+    }
+
+    private fun unwrapFirestoreException(error: Throwable): FirebaseFirestoreException? =
+        generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
 
     private suspend fun mirrorAlertToCloud(uid: String, alert: LoginSecurityAlert) {
         val path = "$COL_LOGIN_ALERTS/${alert.id}"
@@ -1092,7 +1271,8 @@ class SecuritySessionRepository(
 
     private fun parseRemoteSession(
         doc: DocumentSnapshot,
-        mySessionId: String
+        mySessionId: String,
+        isFromCache: Boolean = false
     ): ActiveDeviceSession? {
         val data = doc.data ?: return null
         val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
@@ -1102,12 +1282,24 @@ class SecuritySessionRepository(
             ?: doc.getTimestamp("loginAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
             ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
             ?: System.currentTimeMillis()
+        val updatedAtMillis = doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
         val activeMillis = (data["lastActiveMillis"] as? Number)?.toLong()
             ?: doc.getTimestamp("lastActiveAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
-            ?: doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: updatedAtMillis
             ?: loginMillis
 
-        if (id == mySessionId && status == AdminDeviceStatus.REVOKED) {
+        // Only revoke the current device if Firestore server explicitly marks it REVOKED
+        // AFTER our current sign-in registration finished (prevents stale pre-login revocations
+        // from falsely forcing the user to sign in twice).
+        val revokedAfterCurrentActivation = updatedAtMillis == null ||
+            currentSessionActivatedAtMillis <= 0L ||
+            updatedAtMillis >= (currentSessionActivatedAtMillis - 2_000L)
+        if (!isRegisteringCurrentSession &&
+            !isFromCache &&
+            id == mySessionId &&
+            status == AdminDeviceStatus.REVOKED &&
+            revokedAfterCurrentActivation
+        ) {
             _isCurrentSessionRevoked.value = true
         }
 
@@ -1128,6 +1320,13 @@ class SecuritySessionRepository(
             .ifBlank { (data["userEmail"] as? String).orEmpty().trim() }
             .ifBlank { (data["adminEmail"] as? String).orEmpty().trim() }
 
+        val resolvedBrowser = ActiveDeviceSession.resolveBrowserName(
+            explicitBrowser = data["browser"] as? String,
+            userAgent = data["userAgent"] as? String,
+            deviceName = resolvedDeviceName,
+            platform = normalizedPlatform
+        )
+
         return ActiveDeviceSession(
             id = id,
             deviceId = devId,
@@ -1138,7 +1337,8 @@ class SecuritySessionRepository(
             loginAtMillis = loginMillis,
             lastActiveMillis = activeMillis,
             status = status,
-            isCurrentDevice = devId == localDeviceId || id == mySessionId
+            isCurrentDevice = devId == localDeviceId || id == mySessionId,
+            browser = resolvedBrowser
         )
     }
 
@@ -1250,18 +1450,27 @@ class SecuritySessionRepository(
                         val devId = obj.optString("deviceId")
                         val status = AdminDeviceStatus.fromValue(obj.optString("status"))
                         if (id.isNotBlank() && status == AdminDeviceStatus.ACTIVE) {
+                            val devName = obj.optString("deviceName", "Android Device")
+                            val plat = obj.optString("platform", "Mobile App")
+                            val savedBrowser = ActiveDeviceSession.resolveBrowserName(
+                                explicitBrowser = obj.optString("browser"),
+                                userAgent = null,
+                                deviceName = devName,
+                                platform = plat
+                            )
                             add(
                                 ActiveDeviceSession(
                                     id = id,
                                     deviceId = devId,
-                                    deviceName = obj.optString("deviceName", "Android Device"),
-                                    platform = obj.optString("platform", "Mobile App"),
+                                    deviceName = devName,
+                                    platform = plat,
                                     email = obj.optString("email"),
                                     location = obj.optString("location", fallbackLocaleLocation()),
                                     loginAtMillis = obj.optLong("loginAtMillis"),
                                     lastActiveMillis = obj.optLong("lastActiveMillis"),
                                     status = status,
-                                    isCurrentDevice = devId == localDeviceId
+                                    isCurrentDevice = devId == localDeviceId,
+                                    browser = savedBrowser
                                 )
                             )
                         }
@@ -1317,6 +1526,7 @@ class SecuritySessionRepository(
                     put("loginAtMillis", s.loginAtMillis)
                     put("lastActiveMillis", s.lastActiveMillis)
                     put("status", s.status.value)
+                    put("browser", s.resolvedBrowserLabel)
                 }
             )
         }
@@ -1416,7 +1626,23 @@ class SecuritySessionRepository(
         const val DOC_AUTHENTICATOR = "authenticator"
         const val MAX_TOTP_ATTEMPTS_BEFORE_COOLDOWN = 5
         const val TOTP_COOLDOWN_MILLIS = 30_000L
+        const val HEARTBEAT_MIN_INTERVAL_MILLIS = 15_000L
         const val SYNTHETIC_ALERT_PREFIX = "sess_alert_"
         val ID_SANITIZE_REGEX = Regex("[^a-zA-Z0-9_-]")
+        val REQUIRED_SESSION_KEYS = setOf(
+            "id",
+            "uid",
+            "deviceId",
+            "deviceName",
+            "platform",
+            "email",
+            "location",
+            "loginAtMillis",
+            "lastActiveMillis",
+            "status",
+            "createdAt",
+            "updatedAt"
+        )
+        val ALLOWED_SESSION_KEYS = REQUIRED_SESSION_KEYS + "userAgent"
     }
 }

@@ -66,7 +66,8 @@ fun VehicleInventoryCard(
     onToggleFeatured: () -> Unit,
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visitorPreviewMode: Boolean = false
 ) {
     var statusMenuExpanded by remember { mutableStateOf(false) }
     var actionMenuExpanded by remember { mutableStateOf(false) }
@@ -145,14 +146,21 @@ fun VehicleInventoryCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box {
+                        val statusBadgeModifier = if (visitorPreviewMode) {
+                            Modifier
+                                .clip(CircleShape)
+                                .testTag("status_pill_${vehicle.id}")
+                        } else {
+                            Modifier
+                                .clip(CircleShape)
+                                .clickable { statusMenuExpanded = true }
+                                .testTag("status_pill_${vehicle.id}")
+                        }
                         Surface(
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
                             shape = CircleShape,
                             shadowElevation = 2.dp,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .clickable { statusMenuExpanded = true }
-                                .testTag("status_pill_${vehicle.id}")
+                            modifier = statusBadgeModifier
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -174,18 +182,20 @@ fun VehicleInventoryCard(
                             }
                         }
 
-                        DropdownMenu(
-                            expanded = statusMenuExpanded,
-                            onDismissRequest = { statusMenuExpanded = false }
-                        ) {
-                            VehicleStatus.entries.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text("Mark ${option.label}") },
-                                    onClick = {
-                                        statusMenuExpanded = false
-                                        onStatusChange(option)
-                                    }
-                                )
+                        if (!visitorPreviewMode) {
+                            DropdownMenu(
+                                expanded = statusMenuExpanded,
+                                onDismissRequest = { statusMenuExpanded = false }
+                            ) {
+                                VehicleStatus.entries.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text("Mark ${option.label}") },
+                                        onClick = {
+                                            statusMenuExpanded = false
+                                            onStatusChange(option)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -217,87 +227,89 @@ fun VehicleInventoryCard(
                     }
                 }
 
-                // Top-right overlaid action button
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                        shape = CircleShape,
-                        shadowElevation = 2.dp
+                if (!visitorPreviewMode) {
+                    // Top-right overlaid action button
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
                     ) {
-                        IconButton(
-                            onClick = { actionMenuExpanded = true },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .testTag("vehicle_menu_${vehicle.id}")
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                            shape = CircleShape,
+                            shadowElevation = 2.dp
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "Vehicle actions",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(18.dp)
+                            IconButton(
+                                onClick = { actionMenuExpanded = true },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("vehicle_menu_${vehicle.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "Vehicle actions",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = actionMenuExpanded,
+                            onDismissRequest = { actionMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Edit", fontWeight = FontWeight.SemiBold) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Edit, contentDescription = null)
+                                },
+                                onClick = {
+                                    actionMenuExpanded = false
+                                    onEditClick()
+                                },
+                                modifier = Modifier.testTag("vehicle_edit_option_${vehicle.id}")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Quick Price Edit") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Edit, contentDescription = null)
+                                },
+                                onClick = {
+                                    actionMenuExpanded = false
+                                    onQuickPriceClick()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (vehicle.featured) "Remove Featured" else "Mark Featured")
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Star, contentDescription = null)
+                                },
+                                onClick = {
+                                    actionMenuExpanded = false
+                                    onToggleFeatured()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Remove from Lot",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.DeleteOutline,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    actionMenuExpanded = false
+                                    onDeleteClick()
+                                }
                             )
                         }
-                    }
-                    DropdownMenu(
-                        expanded = actionMenuExpanded,
-                        onDismissRequest = { actionMenuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Edit", fontWeight = FontWeight.SemiBold) },
-                            leadingIcon = {
-                                Icon(Icons.Default.Edit, contentDescription = null)
-                            },
-                            onClick = {
-                                actionMenuExpanded = false
-                                onEditClick()
-                            },
-                            modifier = Modifier.testTag("vehicle_edit_option_${vehicle.id}")
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Quick Price Edit") },
-                            leadingIcon = {
-                                Icon(Icons.Default.Edit, contentDescription = null)
-                            },
-                            onClick = {
-                                actionMenuExpanded = false
-                                onQuickPriceClick()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(if (vehicle.featured) "Remove Featured" else "Mark Featured")
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.Star, contentDescription = null)
-                            },
-                            onClick = {
-                                actionMenuExpanded = false
-                                onToggleFeatured()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Remove from Lot",
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.DeleteOutline,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            onClick = {
-                                actionMenuExpanded = false
-                                onDeleteClick()
-                            }
-                        )
                     }
                 }
             }
@@ -393,31 +405,54 @@ fun VehicleInventoryCard(
                     }
                 }
 
-                Surface(
-                    onClick = onQuickPriceClick,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .height(36.dp)
-                        .testTag("edit_price_button_${vehicle.id}")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                if (!visitorPreviewMode) {
+                    Surface(
+                        onClick = onQuickPriceClick,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("edit_price_button_${vehicle.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Quick edit price",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = "Edit Price",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Quick edit price",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "Edit Price",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                } else {
+                    val visitorTag = listOf(
+                        vehicle.transmission.trim().takeIf { it.isNotEmpty() },
+                        vehicle.fuelType.trim().takeIf { it.isNotEmpty() }
+                    ).firstOrNull()
+                    if (visitorTag != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = CircleShape
+                        ) {
+                            Text(
+                                text = visitorTag,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
                     }
                 }
             }

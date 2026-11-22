@@ -154,16 +154,18 @@ class PortalViewModel(
     }
 
     fun registerAuthenticatedSession(user: FirebaseUser) {
-        securityRepository.startObservingCloudSecurity(
-            uid = user.uid,
-            onNewAlert = { alert ->
-                SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
-            }
-        )
         viewModelScope.launch {
+            // Register this phone's session as ACTIVE in Firestore FIRST before attaching
+            // snapshot listeners so a stale pre-login "revoked" doc never kicks the user out twice.
             securityRepository.registerCurrentDeviceSignIn(user) { alert ->
                 SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
             }
+            securityRepository.startObservingCloudSecurity(
+                uid = user.uid,
+                onNewAlert = { alert ->
+                    SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
+                }
+            )
         }
     }
 
@@ -313,11 +315,19 @@ class PortalViewModel(
         securityRepository.markCurrentSessionSignedOut()
     }
 
-    suspend fun prepareSignOutAllDevices(totpCode: String = ""): Result<Int> {
+    suspend fun removeAllOtherActiveDevices(totpCode: String = ""): Result<Int> {
         if (_isSigningOutAll.value) return Result.success(0)
         _isSigningOutAll.value = true
         return try {
-            securityRepository.revokeAllActiveSessionsAndSignOut(totpCode = totpCode)
+            val result = securityRepository.revokeAllOtherActiveSessions(totpCode = totpCode)
+            result.onSuccess { count ->
+                _snackbarMessage.value = if (count > 0) {
+                    "Removed $count other active device(s). This phone stays signed in."
+                } else {
+                    "All other devices removed. This phone stays signed in."
+                }
+            }
+            result
         } finally {
             _isSigningOutAll.value = false
         }
@@ -351,10 +361,28 @@ class PortalViewModel(
         if (_isMutating.value) return
         viewModelScope.launch {
             _isMutating.value = true
+            val normalizedUrl = com.example.data.network.TikTokThumbnailResolver
+                .normalizeTikTokUrl(draft.tiktokUrl)
+                ?: draft.tiktokUrl.trim()
+            val resolvedCover = draft.coverImageUrl.trim().ifBlank {
+                if (normalizedUrl.isNotBlank()) {
+                    kotlinx.coroutines.withTimeoutOrNull(6_000L) {
+                        com.example.data.network.TikTokThumbnailResolver
+                            .resolveMetadata(normalizedUrl)
+                            ?.thumbnailUrl
+                    }.orEmpty()
+                } else {
+                    ""
+                }
+            }
+            val enrichedDraft = draft.copy(
+                tiktokUrl = normalizedUrl,
+                coverImageUrl = resolvedCover
+            )
             val result = if (editingPostId == null) {
-                repository.addTikTokPost(draft).map { }
+                repository.addTikTokPost(enrichedDraft).map { }
             } else {
-                repository.updateTikTokPost(editingPostId, draft)
+                repository.updateTikTokPost(editingPostId, enrichedDraft)
             }
             _isMutating.value = false
             result.onSuccess {

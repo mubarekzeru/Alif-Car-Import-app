@@ -764,3 +764,121 @@ test("config/authenticator: enforces admin-only access and strict Base32 TOTP sc
   await assertFails(ownerDb.collection("config").doc("authenticator").delete());
 });
 
+test("config/security forceSignOutBefore allows same-second sign-in when cutoff has sub-second millis but blocks strictly older second", async () => {
+  const baseSec = Math.floor((Date.now() - 10000) / 1000);
+  const subSecondCutoff = new Date(baseSec * 1000 + 750);
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("config").doc("security").set({
+      forceSignOutBefore: subSecondCutoff,
+      triggeredByEmail: BOOTSTRAP_EMAIL,
+      updatedAt: subSecondCutoff,
+    });
+  });
+
+  const sameSecondOwnerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+      auth_time: baseSec,
+    })
+    .firestore();
+
+  const olderSecondOwnerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+      auth_time: baseSec - 1,
+    })
+    .firestore();
+
+  await assertSucceeds(
+    sameSecondOwnerDb
+      .collection("adminSessions")
+      .doc("sess_same_sec")
+      .set(validAdminSessionPayload("sess_same_sec", "owner_uid"))
+  );
+
+  await assertFails(
+    olderSecondOwnerDb
+      .collection("adminSessions")
+      .doc("sess_older_sec")
+      .set(validAdminSessionPayload("sess_older_sec", "owner_uid"))
+  );
+});
+
+test("adminSessions: owner can repair own legacy doc into valid schema, but cannot hijack uid or mutate existing createdAt", async () => {
+  const legacyCreatedAt = pastTimestamp(30000);
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context
+      .firestore()
+      .collection("adminSessions")
+      .doc("sess_legacy_owner")
+      .set({
+        uid: "owner_uid",
+        deviceId: "dev_legacy_123",
+        deviceName: "Old App",
+        browser: "LegacyField",
+        createdAt: legacyCreatedAt,
+        updatedAt: legacyCreatedAt,
+      });
+  });
+
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const otherAdminDb = testEnv
+    .authenticatedContext("mgr_uid", {
+      email: OTHER_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // Overwriting existing createdAt must still fail
+  await assertFails(
+    ownerDb
+      .collection("adminSessions")
+      .doc("sess_legacy_owner")
+      .set(
+        validAdminSessionPayload("sess_legacy_owner", "owner_uid", {
+          deviceId: "dev_legacy_123",
+          createdAt: pastTimestamp(500),
+          updatedAt: pastTimestamp(500),
+        })
+      )
+  );
+
+  // Repairing into valid schema while preserving existing createdAt succeeds
+  await assertSucceeds(
+    ownerDb
+      .collection("adminSessions")
+      .doc("sess_legacy_owner")
+      .set(
+        validAdminSessionPayload("sess_legacy_owner", "owner_uid", {
+          deviceId: "dev_legacy_123",
+          createdAt: legacyCreatedAt,
+          updatedAt: pastTimestamp(500),
+        })
+      )
+  );
+
+  // Once conformant, modifying createdAt or deviceId or non-owner editing remains blocked
+  await assertFails(
+    ownerDb.collection("adminSessions").doc("sess_legacy_owner").update({
+      deviceId: "dev_hijacked",
+      updatedAt: pastTimestamp(200),
+    })
+  );
+  await assertFails(
+    otherAdminDb.collection("adminSessions").doc("sess_legacy_owner").update({
+      location: "Spoofed",
+      updatedAt: pastTimestamp(200),
+    })
+  );
+});
+
+

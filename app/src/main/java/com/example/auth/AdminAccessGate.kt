@@ -105,28 +105,37 @@ fun observeAdminAuthorization(
 
     emit(AdminAuthorizationState.Checking)
 
-    // Ensure fresh ID token & read real JWT auth_time before checking Firestore rules
-    val tokenAuthTimeMillis = runCatching {
-        user.getIdToken(false).await().authTimestamp * 1000L
+    // Ensure fresh ID token & read real JWT auth_time (whole seconds) before checking Firestore rules
+    val tokenAuthTimeSeconds = runCatching {
+        user.getIdToken(true).await().authTimestamp
+    }.recoverCatching {
+        user.getIdToken(false).await().authTimestamp
     }.getOrDefault(0L)
-    val userAuthTimeMillis = tokenAuthTimeMillis.takeIf { it > 0L }
-        ?: (user.metadata?.lastSignInTimestamp ?: 0L)
+    val userAuthTimeSeconds = tokenAuthTimeSeconds.takeIf { it > 0L }
+        ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
 
     // Server-side global sign-out check: if an admin triggered "Sign Out All Devices"
     // after this user signed in, expire this session immediately before showing any data.
-    val cutoffMillis = try {
+    val cutoffSeconds = try {
         val secSnap = db.collection("config")
             .document("security")
             .get(Source.SERVER)
             .await()
-        secSnap.getTimestamp("forceSignOutBefore")?.toDate()?.time
+        secSnap.getTimestamp("forceSignOutBefore")?.seconds
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
-        null
+        runCatching {
+            db.collection("config")
+                .document("security")
+                .get(Source.CACHE)
+                .await()
+                .getTimestamp("forceSignOutBefore")
+                ?.seconds
+        }.getOrNull()
     }
 
-    if (cutoffMillis != null && userAuthTimeMillis > 0L && userAuthTimeMillis < cutoffMillis) {
+    if (cutoffSeconds != null && userAuthTimeSeconds > 0L && userAuthTimeSeconds < cutoffSeconds) {
         emit(AdminAuthorizationState.SessionExpired(rawEmail))
         return@flow
     }

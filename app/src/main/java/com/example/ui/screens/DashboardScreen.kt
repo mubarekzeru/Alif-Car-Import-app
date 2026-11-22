@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -104,24 +105,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.R
 import com.example.data.firebase.InquiriesState
+import com.example.data.model.TikTokPost
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.components.BottomNavTab
 import com.example.ui.components.CustomerInquiriesTabContent
 import com.example.ui.components.FloatingBottomNavBar
+import com.example.ui.components.HomeTikTokShowcaseSection
 import com.example.ui.components.LotMetricsStrip
 import com.example.ui.components.ResilientAppImage
 import com.example.ui.components.SettingsTabContent
+import com.example.ui.components.TikTokPostDetailDialog
 import com.example.ui.components.VehicleInventoryCard
-import com.example.ui.components.buildAppImageRequest
-import com.example.ui.components.decodeImageModel
 import com.example.ui.components.resolveCandidateImageUrls
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.example.ui.theme.WarmCoralTop
 import com.example.ui.theme.WarmPeachWash
+import com.example.ui.viewmodel.DashboardSection
 import com.example.ui.viewmodel.FilterState
 import com.example.ui.viewmodel.InventoryUiState
 import com.example.ui.viewmodel.InventoryViewModel
@@ -214,7 +216,11 @@ fun DashboardScreen(
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { }
+    ) { granted ->
+        if (granted) {
+            com.example.ui.notifications.AdminAlertMonitorService.startIfEnabled(context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -283,6 +289,8 @@ fun DashboardScreen(
                     HomeDashboardTab(
                         uiState = uiState,
                         filterState = filterState,
+                        tikTokPosts = tikTokPosts,
+                        tikTokHandle = showroomConfig.tiktok.handle,
                         selectedVehicleId = selectedVehicleId,
                         sortMenuExpanded = sortMenuExpanded,
                         pendingAlertsCount = pendingAlertsCount,
@@ -306,7 +314,13 @@ fun DashboardScreen(
                         onToggleFeatured = viewModel::toggleFeatured,
                         onOpenEditVehicle = onOpenEditVehicle,
                         onDeleteVehicle = viewModel::requestDeleteVehicle,
-                        onOpenAddVehicle = onOpenAddVehicle
+                        onOpenAddVehicle = onOpenAddVehicle,
+                        onOpenEditTikTok = { post -> onOpenEditTikTok(post.id) },
+                        onDeleteTikTok = portalViewModel::requestDeleteTikTokPost,
+                        onViewAllTikTok = {
+                            portalViewModel.selectDashboardSection(DashboardSection.TIKTOK_VIDEOS)
+                            portalViewModel.selectBottomNavTab(BottomNavTab.SETTINGS)
+                        }
                     )
                 }
 
@@ -476,6 +490,8 @@ fun DashboardScreen(
 private fun HomeDashboardTab(
     uiState: InventoryUiState,
     filterState: FilterState,
+    tikTokPosts: List<TikTokPost>,
+    tikTokHandle: String,
     selectedVehicleId: String?,
     sortMenuExpanded: Boolean,
     pendingAlertsCount: Int,
@@ -494,8 +510,25 @@ private fun HomeDashboardTab(
     onToggleFeatured: (Vehicle) -> Unit,
     onOpenEditVehicle: (String) -> Unit,
     onDeleteVehicle: (Vehicle) -> Unit,
-    onOpenAddVehicle: () -> Unit
+    onOpenAddVehicle: () -> Unit,
+    onOpenEditTikTok: (TikTokPost) -> Unit,
+    onDeleteTikTok: (TikTokPost) -> Unit,
+    onViewAllTikTok: () -> Unit
 ) {
+    var selectedTikTokDetail by remember { mutableStateOf<TikTokPost?>(null) }
+    val visibleTikTokPosts = remember(tikTokPosts, filterState.searchQuery) {
+        val query = filterState.searchQuery.trim()
+        if (query.isEmpty()) {
+            tikTokPosts
+        } else {
+            tikTokPosts.filter { post ->
+                post.title.contains(query, ignoreCase = true) ||
+                    post.caption.contains(query, ignoreCase = true) ||
+                    post.tiktokUrl.contains(query, ignoreCase = true)
+            }
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpandedSplit = maxWidth >= 840.dp
         val isMediumGrid = maxWidth in 600.dp..839.dp
@@ -811,6 +844,7 @@ private fun HomeDashboardTab(
                                     ) {
                                         InventoryFeedContent(
                                             vehicles = state.filteredVehicles,
+                                            tikTokPosts = visibleTikTokPosts,
                                             selectedVehicleId = selectedVehicle?.id,
                                             isGrid = false,
                                             onCardClick = { onSelectVehicleSplit(it.id) },
@@ -819,7 +853,11 @@ private fun HomeDashboardTab(
                                             onToggleFeatured = onToggleFeatured,
                                             onEditClick = { onOpenEditVehicle(it.id) },
                                             onDeleteClick = onDeleteVehicle,
-                                            onAddVehicleClick = onOpenAddVehicle
+                                            onAddVehicleClick = onOpenAddVehicle,
+                                            onTikTokCardClick = { selectedTikTokDetail = it },
+                                            onTikTokEditClick = onOpenEditTikTok,
+                                            onTikTokDeleteClick = onDeleteTikTok,
+                                            onViewAllTikTok = onViewAllTikTok
                                         )
                                     }
 
@@ -847,7 +885,8 @@ private fun HomeDashboardTab(
                                                 },
                                                 onDeleteClick = {
                                                     onDeleteVehicle(selectedVehicle)
-                                                }
+                                                },
+                                                visitorPreviewMode = true
                                             )
                                         } else {
                                             EmptyLotState(onAddClick = onOpenAddVehicle)
@@ -857,6 +896,7 @@ private fun HomeDashboardTab(
                             } else {
                                 InventoryFeedContent(
                                     vehicles = state.filteredVehicles,
+                                    tikTokPosts = visibleTikTokPosts,
                                     selectedVehicleId = null,
                                     isGrid = isMediumGrid,
                                     onCardClick = { onOpenVehicleDetail(it.id) },
@@ -865,7 +905,11 @@ private fun HomeDashboardTab(
                                     onToggleFeatured = onToggleFeatured,
                                     onEditClick = { onOpenEditVehicle(it.id) },
                                     onDeleteClick = onDeleteVehicle,
-                                    onAddVehicleClick = onOpenAddVehicle
+                                    onAddVehicleClick = onOpenAddVehicle,
+                                    onTikTokCardClick = { selectedTikTokDetail = it },
+                                    onTikTokEditClick = onOpenEditTikTok,
+                                    onTikTokDeleteClick = onDeleteTikTok,
+                                    onViewAllTikTok = onViewAllTikTok
                                 )
                             }
                         }
@@ -873,6 +917,23 @@ private fun HomeDashboardTab(
                 }
             }
         }
+    }
+
+    selectedTikTokDetail?.let { post ->
+        TikTokPostDetailDialog(
+            post = post,
+            handle = tikTokHandle,
+            onDismiss = { selectedTikTokDetail = null },
+            onEditClick = {
+                selectedTikTokDetail = null
+                onOpenEditTikTok(post)
+            },
+            onDeleteClick = {
+                selectedTikTokDetail = null
+                onDeleteTikTok(post)
+            },
+            visitorPreviewMode = true
+        )
     }
 }
 
@@ -938,6 +999,7 @@ private fun StatusFilterRow(
 @Composable
 private fun InventoryFeedContent(
     vehicles: List<Vehicle>,
+    tikTokPosts: List<TikTokPost>,
     selectedVehicleId: String?,
     isGrid: Boolean,
     onCardClick: (Vehicle) -> Unit,
@@ -946,9 +1008,13 @@ private fun InventoryFeedContent(
     onToggleFeatured: (Vehicle) -> Unit,
     onEditClick: (Vehicle) -> Unit,
     onDeleteClick: (Vehicle) -> Unit,
-    onAddVehicleClick: () -> Unit
+    onAddVehicleClick: () -> Unit,
+    onTikTokCardClick: (TikTokPost) -> Unit,
+    onTikTokEditClick: (TikTokPost) -> Unit,
+    onTikTokDeleteClick: (TikTokPost) -> Unit,
+    onViewAllTikTok: () -> Unit
 ) {
-    if (vehicles.isEmpty()) {
+    if (vehicles.isEmpty() && tikTokPosts.isEmpty()) {
         EmptyLotState(onAddClick = onAddVehicleClick)
         return
     }
@@ -965,26 +1031,54 @@ private fun InventoryFeedContent(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(
-                items = vehicles,
-                key = { it.id },
-                contentType = { "vehicle_card" }
-            ) { vehicle ->
-                VehicleInventoryCard(
-                    vehicle = vehicle,
-                    isSelected = vehicle.id == selectedVehicleId,
-                    onCardClick = { onCardClick(vehicle) },
-                    onQuickPriceClick = { onQuickPriceClick(vehicle) },
-                    onStatusChange = { status -> onStatusChange(vehicle, status) },
-                    onToggleFeatured = { onToggleFeatured(vehicle) },
-                    onEditClick = { onEditClick(vehicle) },
-                    onDeleteClick = { onDeleteClick(vehicle) },
-                    modifier = Modifier.animateItem(
-                        fadeInSpec = tween(200),
-                        placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                        fadeOutSpec = tween(160)
+            if (tikTokPosts.isNotEmpty()) {
+                item(
+                    key = "home_tiktok_showcase",
+                    span = { GridItemSpan(maxLineSpan) },
+                    contentType = "tiktok_showcase"
+                ) {
+                    HomeTikTokShowcaseSection(
+                        posts = tikTokPosts,
+                        onCardClick = onTikTokCardClick,
+                        onEditClick = onTikTokEditClick,
+                        onDeleteClick = onTikTokDeleteClick,
+                        onViewAllClick = onViewAllTikTok,
+                        visitorPreviewMode = true
                     )
-                )
+                }
+            }
+
+            if (vehicles.isEmpty()) {
+                item(
+                    key = "home_empty_vehicles",
+                    span = { GridItemSpan(maxLineSpan) },
+                    contentType = "empty_vehicles"
+                ) {
+                    EmptyLotState(onAddClick = onAddVehicleClick)
+                }
+            } else {
+                items(
+                    items = vehicles,
+                    key = { it.id },
+                    contentType = { "vehicle_card" }
+                ) { vehicle ->
+                    VehicleInventoryCard(
+                        vehicle = vehicle,
+                        isSelected = vehicle.id == selectedVehicleId,
+                        onCardClick = { onCardClick(vehicle) },
+                        onQuickPriceClick = { onQuickPriceClick(vehicle) },
+                        onStatusChange = { status -> onStatusChange(vehicle, status) },
+                        onToggleFeatured = { onToggleFeatured(vehicle) },
+                        onEditClick = { onEditClick(vehicle) },
+                        onDeleteClick = { onDeleteClick(vehicle) },
+                        visitorPreviewMode = true,
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = tween(200),
+                            placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            fadeOutSpec = tween(160)
+                        )
+                    )
+                }
             }
         }
     } else {
@@ -994,26 +1088,52 @@ private fun InventoryFeedContent(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(
-                items = vehicles,
-                key = { it.id },
-                contentType = { "vehicle_card" }
-            ) { vehicle ->
-                VehicleInventoryCard(
-                    vehicle = vehicle,
-                    isSelected = vehicle.id == selectedVehicleId,
-                    onCardClick = { onCardClick(vehicle) },
-                    onQuickPriceClick = { onQuickPriceClick(vehicle) },
-                    onStatusChange = { status -> onStatusChange(vehicle, status) },
-                    onToggleFeatured = { onToggleFeatured(vehicle) },
-                    onEditClick = { onEditClick(vehicle) },
-                    onDeleteClick = { onDeleteClick(vehicle) },
-                    modifier = Modifier.animateItem(
-                        fadeInSpec = tween(200),
-                        placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                        fadeOutSpec = tween(160)
+            if (tikTokPosts.isNotEmpty()) {
+                item(
+                    key = "home_tiktok_showcase",
+                    contentType = "tiktok_showcase"
+                ) {
+                    HomeTikTokShowcaseSection(
+                        posts = tikTokPosts,
+                        onCardClick = onTikTokCardClick,
+                        onEditClick = onTikTokEditClick,
+                        onDeleteClick = onTikTokDeleteClick,
+                        onViewAllClick = onViewAllTikTok,
+                        visitorPreviewMode = true
                     )
-                )
+                }
+            }
+
+            if (vehicles.isEmpty()) {
+                item(
+                    key = "home_empty_vehicles",
+                    contentType = "empty_vehicles"
+                ) {
+                    EmptyLotState(onAddClick = onAddVehicleClick)
+                }
+            } else {
+                items(
+                    items = vehicles,
+                    key = { it.id },
+                    contentType = { "vehicle_card" }
+                ) { vehicle ->
+                    VehicleInventoryCard(
+                        vehicle = vehicle,
+                        isSelected = vehicle.id == selectedVehicleId,
+                        onCardClick = { onCardClick(vehicle) },
+                        onQuickPriceClick = { onQuickPriceClick(vehicle) },
+                        onStatusChange = { status -> onStatusChange(vehicle, status) },
+                        onToggleFeatured = { onToggleFeatured(vehicle) },
+                        onEditClick = { onEditClick(vehicle) },
+                        onDeleteClick = { onDeleteClick(vehicle) },
+                        visitorPreviewMode = true,
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = tween(200),
+                            placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            fadeOutSpec = tween(160)
+                        )
+                    )
+                }
             }
         }
     }

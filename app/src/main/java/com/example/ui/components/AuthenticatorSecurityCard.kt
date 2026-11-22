@@ -449,7 +449,7 @@ fun AuthenticatorSecurityCard(
                             shape = MaterialTheme.shapes.medium
                         ) {
                             Text(
-                                text = "Protected (${status.accountLabel.ifBlank { "Admin" }}): Removing active devices, Sign Out All Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code.",
+                                text = "Protected (${status.accountLabel.ifBlank { "Admin" }}): Removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = EmeraldAvailable,
                                 modifier = Modifier

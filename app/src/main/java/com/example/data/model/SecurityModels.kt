@@ -33,10 +33,19 @@ data class ActiveDeviceSession(
     val loginAtMillis: Long,
     val lastActiveMillis: Long,
     val status: AdminDeviceStatus = AdminDeviceStatus.ACTIVE,
-    val isCurrentDevice: Boolean = false
+    val isCurrentDevice: Boolean = false,
+    val browser: String = ""
 ) {
     val isWebsiteSession: Boolean
         get() = isWebsitePlatform(platform)
+
+    val resolvedBrowserLabel: String
+        get() = resolveBrowserName(
+            explicitBrowser = browser,
+            userAgent = null,
+            deviceName = deviceName,
+            platform = platform
+        )
 
     companion object {
         fun isWebsitePlatform(platform: String): Boolean {
@@ -54,6 +63,75 @@ data class ActiveDeviceSession(
                 normalized.contains("safari") ||
                 normalized.contains("firefox") ||
                 normalized.contains("edge")
+        }
+
+        fun resolveBrowserName(
+            explicitBrowser: String?,
+            userAgent: String?,
+            deviceName: String?,
+            platform: String?
+        ): String {
+            val cleanedExplicit = explicitBrowser.orEmpty().trim()
+            if (cleanedExplicit.isNotEmpty()) {
+                detectBrowserFromText(cleanedExplicit)?.let { return it }
+                if (cleanedExplicit.length <= 40 && !cleanedExplicit.startsWith("Mozilla/", ignoreCase = true)) {
+                    return cleanedExplicit
+                }
+            }
+
+            val ua = userAgent.orEmpty().trim()
+            if (ua.isNotEmpty()) {
+                detectBrowserFromUserAgent(ua)?.let { return it }
+            }
+
+            val device = deviceName.orEmpty().trim()
+            if (device.isNotEmpty()) {
+                detectBrowserFromText(device)?.let { return it }
+            }
+
+            val plat = platform.orEmpty().trim()
+            if (plat.isNotEmpty()) {
+                detectBrowserFromText(plat)?.let { return it }
+            }
+
+            return if (isWebsitePlatform(plat)) "Web Browser" else "Mobile App"
+        }
+
+        private fun detectBrowserFromUserAgent(ua: String): String? {
+            val lower = ua.lowercase()
+            return when {
+                lower.contains("edg/") || lower.contains("edga/") || lower.contains("edgios/") || lower.contains("edge/") -> "Microsoft Edge"
+                lower.contains("samsungbrowser/") -> "Samsung Internet"
+                lower.contains("opr/") || lower.contains("opera") -> "Opera"
+                lower.contains("brave") -> "Brave"
+                lower.contains("vivaldi/") -> "Vivaldi"
+                lower.contains("ucbrowser/") -> "UC Browser"
+                lower.contains("yabrowser/") -> "Yandex Browser"
+                lower.contains("firefox/") || lower.contains("fxios/") -> "Firefox"
+                lower.contains("crios/") -> "Google Chrome"
+                lower.contains("chrome/") || lower.contains("chromium/") -> "Google Chrome"
+                lower.contains("safari/") -> "Safari"
+                lower.contains("; wv)") -> "Android WebView"
+                else -> null
+            }
+        }
+
+        private fun detectBrowserFromText(text: String): String? {
+            val lower = text.lowercase()
+            return when {
+                lower.contains("microsoft edge") || lower.contains("msedge") || Regex("\\bedge\\b").containsMatchIn(lower) -> "Microsoft Edge"
+                lower.contains("samsung internet") || lower.contains("samsungbrowser") -> "Samsung Internet"
+                lower.contains("opera") -> "Opera"
+                lower.contains("brave") -> "Brave"
+                lower.contains("vivaldi") -> "Vivaldi"
+                lower.contains("uc browser") || lower.contains("ucbrowser") -> "UC Browser"
+                lower.contains("yandex") -> "Yandex Browser"
+                lower.contains("firefox") -> "Firefox"
+                lower.contains("chrome") || lower.contains("chromium") -> "Google Chrome"
+                lower.contains("safari") -> "Safari"
+                lower.contains("webview") -> "Android WebView"
+                else -> null
+            }
         }
     }
 }

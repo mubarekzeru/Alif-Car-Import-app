@@ -208,7 +208,8 @@ fun VehicleDetailPane(
     onToggleFeatured: () -> Unit,
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visitorPreviewMode: Boolean = false
 ) {
     val statusColors = vehicle.statusEnum.colors()
     val photoSlots = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
@@ -435,74 +436,76 @@ fun VehicleDetailPane(
                 }
             }
 
-            // Availability Status & Featured Control
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Availability Status",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    VehicleStatus.entries.forEach { option ->
-                        val isSelected = vehicle.statusEnum == option
-                        val optionColors = option.colors()
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onStatusChange(option) },
-                            shape = CircleShape,
-                            label = { Text(option.label, fontWeight = FontWeight.SemiBold) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = optionColors.background,
-                                selectedLabelColor = optionColors.foreground,
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            ),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) optionColors.foreground.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("detail_status_${option.value}")
-                        )
+            if (!visitorPreviewMode) {
+                // Availability Status & Featured Control
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Availability Status",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VehicleStatus.entries.forEach { option ->
+                            val isSelected = vehicle.statusEnum == option
+                            val optionColors = option.colors()
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onStatusChange(option) },
+                                shape = CircleShape,
+                                label = { Text(option.label, fontWeight = FontWeight.SemiBold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = optionColors.background,
+                                    selectedLabelColor = optionColors.foreground,
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelected) optionColors.foreground.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("detail_status_${option.value}")
+                            )
+                        }
                     }
-                }
 
-                FilterChip(
-                    selected = vehicle.featured,
-                    onClick = onToggleFeatured,
-                    shape = CircleShape,
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (vehicle.featured) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    label = {
-                        Text(
-                            text = if (vehicle.featured) "Featured on Website Showcase" else "Pin as Featured on Website",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                        selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        labelColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(46.dp)
-                        .testTag("detail_featured_chip")
-                )
+                    FilterChip(
+                        selected = vehicle.featured,
+                        onClick = onToggleFeatured,
+                        shape = CircleShape,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (vehicle.featured) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = if (vehicle.featured) "Featured on Website Showcase" else "Pin as Featured on Website",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            labelColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("detail_featured_chip")
+                    )
+                }
             }
 
             // Key Specs 2-column grid matching Screen 3 ("Key Specs")
@@ -684,76 +687,78 @@ fun VehicleDetailPane(
             Spacer(modifier = Modifier.height(6.dp))
         }
 
-        // Pinned Luxury Bottom Action Bar matching Screen 3
-        Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (!visitorPreviewMode) {
+            // Pinned Luxury Bottom Action Bar matching Screen 3
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 6.dp
             ) {
-                Surface(
-                    onClick = onDeleteClick,
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                Row(
                     modifier = Modifier
-                        .size(50.dp)
-                        .testTag("detail_delete_button")
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = "Remove vehicle",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    Surface(
+                        onClick = onDeleteClick,
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .size(50.dp)
+                            .testTag("detail_delete_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Remove vehicle",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                }
 
-                Surface(
-                    onClick = onQuickPriceClick,
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier
-                        .size(50.dp)
-                        .testTag("detail_quick_price_button")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Sell,
-                            contentDescription = "Adjust price",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
-                        )
+                    Surface(
+                        onClick = onQuickPriceClick,
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier
+                            .size(50.dp)
+                            .testTag("detail_quick_price_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Sell,
+                                contentDescription = "Adjust price",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                }
 
-                Button(
-                    onClick = onEditClick,
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(50.dp)
-                        .testTag("detail_edit_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Edit Details", fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = onEditClick,
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .testTag("detail_edit_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Edit Details", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

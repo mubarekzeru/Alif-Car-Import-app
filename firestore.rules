@@ -53,7 +53,7 @@ service cloud.firestore {
         (
           ('auth_time' in request.auth.token) &&
           request.auth.token.auth_time is number &&
-          (request.auth.token.auth_time * 1000) >= get(/databases/$(database)/documents/config/security).data.forceSignOutBefore.toMillis()
+          ((request.auth.token.auth_time + 1) * 1000) > get(/databases/$(database)/documents/config/security).data.forceSignOutBefore.toMillis()
         );
     }
 
@@ -503,30 +503,36 @@ service cloud.firestore {
       allow update: if isVerifiedUser() &&
         isValidId(sessionId) &&
         isValidAdminSession(sessionId, incoming()) &&
-        incoming().id == existing().id &&
         incoming().uid == existing().uid &&
-        incoming().deviceId == existing().deviceId &&
-        incoming().createdAt == existing().createdAt &&
         isAdmin() && (
           // Action 1: Any authorized admin can revoke a device session
           (
+            incoming().id == existing().id &&
+            incoming().deviceId == existing().deviceId &&
+            incoming().createdAt == existing().createdAt &&
             incoming().status == 'revoked' &&
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
           ) ||
           // Action 2: Session owner refreshes heartbeat, location, or reactivates on re-login
           (
             existing().uid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'deviceName',
-              'platform',
-              'email',
-              'location',
-              'loginAtMillis',
-              'lastActiveMillis',
-              'status',
-              'userAgent',
-              'updatedAt'
-            ])
+            (!('id' in existing()) || incoming().id == existing().id) &&
+            (!('deviceId' in existing()) || incoming().deviceId == existing().deviceId) &&
+            (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt) &&
+            (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'deviceName',
+                'platform',
+                'email',
+                'location',
+                'loginAtMillis',
+                'lastActiveMillis',
+                'status',
+                'userAgent',
+                'updatedAt'
+              ]) ||
+              !isValidAdminSession(sessionId, existing())
+            )
           )
         );
       allow delete: if false;

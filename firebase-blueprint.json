@@ -76,6 +76,31 @@
       },
       "required": ["adminEmails", "updatedAt"]
     },
+    "SecurityConfig": {
+      "title": "SecurityConfig",
+      "description": "Global admin session cutoff timestamp enforced by Firestore security rules so Sign Out All Devices immediately blocks even pre-update apps and browser tabs.",
+      "type": "object",
+      "properties": {
+        "forceSignOutBefore": { "type": "string", "format": "date-time" },
+        "triggeredByEmail": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["forceSignOutBefore", "triggeredByEmail", "updatedAt"]
+    },
+    "AuthenticatorConfig": {
+      "title": "AuthenticatorConfig",
+      "description": "Google Authenticator (TOTP 2FA) configuration protecting active device removal, global sign-out, password changes, and 2FA disabling across all admin devices.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "secretBase32": { "type": "string" },
+        "accountLabel": { "type": "string" },
+        "issuer": { "type": "string" },
+        "updatedByEmail": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enabled", "secretBase32", "accountLabel", "issuer", "updatedByEmail", "updatedAt"]
+    },
     "TikTokPost": {
       "title": "TikTokPost",
       "description": "TikTok walkaround post displayed on the showroom portal.",
@@ -190,6 +215,14 @@
     "/config/adminAccess": {
       "schema": { "$ref": "#/entities/AdminAccessConfig" },
       "description": "Admin email allowlist."
+    },
+    "/config/security": {
+      "schema": { "$ref": "#/entities/SecurityConfig" },
+      "description": "Global forceSignOutBefore cutoff enforced server-side against auth_time."
+    },
+    "/config/authenticator": {
+      "schema": { "$ref": "#/entities/AuthenticatorConfig" },
+      "description": "Admin-only Google Authenticator (TOTP 2FA) protection state and secret."
     },
     "/tiktokPosts/{postId}": {
       "schema": { "$ref": "#/entities/TikTokPost" },

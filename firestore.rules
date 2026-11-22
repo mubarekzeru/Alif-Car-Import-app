@@ -26,15 +26,15 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    function isBootstrapOwner() {
+    function isBootstrapOwnerIdentity() {
       return isVerifiedUser() &&
         request.auth.token.email is string &&
         request.auth.token.email.lower() == 'alifcarimports@gmail.com';
     }
 
-    function isAdmin() {
+    function isAdminIdentity() {
       return isVerifiedUser() && (
-        isBootstrapOwner() ||
+        isBootstrapOwnerIdentity() ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (
           exists(/databases/$(database)/documents/config/adminAccess) &&
@@ -43,6 +43,26 @@ service cloud.firestore {
           request.auth.token.email.lower() in get(/databases/$(database)/documents/config/adminAccess).data.adminEmails
         )
       );
+    }
+
+    // Server-side global session cutoff: blocks even old, un-updated APKs and stale browser tabs
+    // whose Firebase Auth login (auth_time) occurred before config/security.forceSignOutBefore.
+    function isFreshAdminSession() {
+      return !exists(/databases/$(database)/documents/config/security) ||
+        !(get(/databases/$(database)/documents/config/security).data.forceSignOutBefore is timestamp) ||
+        (
+          ('auth_time' in request.auth.token) &&
+          request.auth.token.auth_time is number &&
+          (request.auth.token.auth_time * 1000) >= get(/databases/$(database)/documents/config/security).data.forceSignOutBefore.toMillis()
+        );
+    }
+
+    function isBootstrapOwner() {
+      return isBootstrapOwnerIdentity() && isFreshAdminSession();
+    }
+
+    function isAdmin() {
+      return isAdminIdentity() && isFreshAdminSession();
     }
 
     function isValidString(val, minLen, maxLen) {
@@ -139,6 +159,46 @@ service cloud.firestore {
         data.adminEmails is list &&
         data.adminEmails.size() <= 20 &&
         (data.adminEmails.size() == 0 || (data.adminEmails[0] is string && data.adminEmails[0].size() <= 254)) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSecurityConfig(data) {
+      return data.keys().hasAll(['forceSignOutBefore', 'triggeredByEmail', 'updatedAt']) &&
+        data.keys().hasOnly(['forceSignOutBefore', 'triggeredByEmail', 'updatedAt']) &&
+        isValidTimestamp(data.forceSignOutBefore) &&
+        isValidString(data.triggeredByEmail, 0, 254) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAuthenticatorConfig(data) {
+      return data.keys().hasAll([
+          'enabled',
+          'secretBase32',
+          'accountLabel',
+          'issuer',
+          'updatedByEmail',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'enabled',
+          'secretBase32',
+          'accountLabel',
+          'issuer',
+          'updatedByEmail',
+          'updatedAt'
+        ]) &&
+        data.enabled is bool &&
+        data.secretBase32 is string &&
+        (
+          (data.enabled == true &&
+            data.secretBase32.size() >= 16 &&
+            data.secretBase32.size() <= 64 &&
+            data.secretBase32.matches('^[A-Z2-7]+$')) ||
+          (data.enabled == false && data.secretBase32 == '')
+        ) &&
+        isValidString(data.accountLabel, 0, 254) &&
+        isValidString(data.issuer, 1, 120) &&
+        isValidString(data.updatedByEmail, 0, 254) &&
         isValidTimestamp(data.updatedAt);
     }
 
@@ -336,18 +396,33 @@ service cloud.firestore {
     match /config/{configId} {
       allow get: if isValidId(configId) && (
         configId == 'showroom' ||
-        (configId == 'adminAccess' && isVerifiedUser() && isAdmin())
+        (configId == 'adminAccess' && isVerifiedUser() && isAdmin()) ||
+        (configId == 'security' && isVerifiedUser() && isAdminIdentity()) ||
+        (configId == 'authenticator' && isVerifiedUser() && isAdmin())
       );
       allow list: if false;
       allow create: if isVerifiedUser() && isValidId(configId) && (
         (configId == 'showroom' && isValidShowroomConfig(incoming())) ||
-        (configId == 'adminAccess' && isValidAdminAccessConfig(incoming()))
+        (configId == 'adminAccess' && isValidAdminAccessConfig(incoming())) ||
+        (configId == 'security' && isValidSecurityConfig(incoming())) ||
+        (configId == 'authenticator' && isValidAuthenticatorConfig(incoming()))
       ) && isAdmin();
       allow update: if isVerifiedUser() && isValidId(configId) && (
         (configId == 'showroom' && isValidShowroomConfig(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['branding', 'hero', 'tiktok', 'contact', 'updatedAt'])) ||
         (configId == 'adminAccess' && isValidAdminAccessConfig(incoming()) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['adminEmails', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['adminEmails', 'updatedAt'])) ||
+        (configId == 'security' && isValidSecurityConfig(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['forceSignOutBefore', 'triggeredByEmail', 'updatedAt'])) ||
+        (configId == 'authenticator' && isValidAuthenticatorConfig(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'enabled',
+            'secretBase32',
+            'accountLabel',
+            'issuer',
+            'updatedByEmail',
+            'updatedAt'
+          ]))
       ) && isAdmin();
       allow delete: if false;
     }

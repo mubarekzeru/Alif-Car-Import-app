@@ -353,4 +353,29 @@ class ExampleUnitTest {
         assertFalse(com.example.data.model.ActiveDeviceSession.isWebsitePlatform("Android App"))
         assertFalse(com.example.data.model.ActiveDeviceSession.isWebsitePlatform(""))
     }
+
+    @Test
+    fun totpAuthenticator_matchesRfc6238AndGoogleAuthenticatorFormat() {
+        // Official RFC 6238 HMAC-SHA1 test secret "12345678901234567890" in Base32
+        val rfcSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+        assertEquals("287082", com.example.data.security.TotpAuthenticator.generateCode(rfcSecret, 59_000L))
+        assertEquals("081804", com.example.data.security.TotpAuthenticator.generateCode(rfcSecret, 1_111_111_109_000L))
+        assertEquals("005924", com.example.data.security.TotpAuthenticator.generateCode(rfcSecret, 1_234_567_890_000L))
+
+        // Verifies pasted codes with spaces or dashes and ±30s clock skew
+        assertTrue(com.example.data.security.TotpAuthenticator.verifyCode(rfcSecret, "287 082", 59_000L))
+        assertTrue(com.example.data.security.TotpAuthenticator.verifyCode(rfcSecret, "287-082", 89_000L))
+        assertFalse(com.example.data.security.TotpAuthenticator.verifyCode(rfcSecret, "000000", 59_000L))
+        assertFalse(com.example.data.security.TotpAuthenticator.verifyCode(rfcSecret, "12345", 59_000L))
+
+        // Generated secret & Google Authenticator otpauth:// URI
+        val generated = com.example.data.security.TotpAuthenticator.generateSecretBase32()
+        assertTrue(com.example.data.security.TotpAuthenticator.isValidSecretBase32(generated))
+        val uri = com.example.data.security.TotpAuthenticator.buildOtpAuthUri(
+            accountEmail = "alifcarimports@gmail.com",
+            secretBase32 = generated
+        )
+        assertTrue(uri.startsWith("otpauth://totp/Alif%20Car%20Import:alifcarimports%40gmail.com?secret=$generated"))
+        assertTrue(uri.contains("&issuer=Alif%20Car%20Import&algorithm=SHA1&digits=6&period=30"))
+    }
 }

@@ -588,3 +588,179 @@ test("loginAlerts: admins receive and verify cross-device login alerts with stri
   );
   await assertFails(ownerDb.collection("loginAlerts").doc("alert_web_001").delete());
 });
+
+test("config/security forceSignOutBefore immediately blocks pre-update/stale admin tokens across all collections", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context
+      .firestore()
+      .collection("config")
+      .doc("adminAccess")
+      .set({ adminEmails: [OTHER_ADMIN_EMAIL], updatedAt: pastTimestamp(120000) });
+  });
+
+  const nowMs = Date.now();
+  const staleAuthTimeSec = Math.floor((nowMs - 60000) / 1000); // Logged in 60s ago (old app/browser)
+  const cutoffDate = new Date(nowMs - 10000); // Global Sign Out All triggered 10s ago
+  const freshAuthTimeSec = Math.floor((nowMs - 2000) / 1000); // Freshly logged in 2s ago
+
+  const ownerBeforeResetDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+      auth_time: staleAuthTimeSec,
+    })
+    .firestore();
+
+  const staleOtherAdminDb = testEnv
+    .authenticatedContext("mgr_uid", {
+      email: OTHER_ADMIN_EMAIL,
+      email_verified: true,
+      auth_time: staleAuthTimeSec,
+    })
+    .firestore();
+
+  const freshOwnerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+      auth_time: freshAuthTimeSec,
+    })
+    .firestore();
+
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+      auth_time: freshAuthTimeSec,
+    })
+    .firestore();
+
+  // Trigger global Sign Out All Devices (writes config/security.forceSignOutBefore)
+  await assertSucceeds(
+    ownerBeforeResetDb.collection("config").doc("security").set({
+      forceSignOutBefore: cutoffDate,
+      triggeredByEmail: BOOTSTRAP_EMAIL,
+      updatedAt: cutoffDate,
+    })
+  );
+
+  // Non-admin cannot read or write config/security
+  await assertFails(nonAdminDb.collection("config").doc("security").get());
+  await assertFails(
+    nonAdminDb.collection("config").doc("security").set({
+      forceSignOutBefore: pastTimestamp(1000),
+      triggeredByEmail: NON_ADMIN_EMAIL,
+      updatedAt: pastTimestamp(1000),
+    })
+  );
+
+  // Stale/pre-update owner & other admin can read config/security (to auto-logout),
+  // but are IMMEDIATELY BLOCKED from all admin reads & writes!
+  await assertSucceeds(ownerBeforeResetDb.collection("config").doc("security").get());
+  await assertSucceeds(staleOtherAdminDb.collection("config").doc("security").get());
+
+  await assertFails(
+    ownerBeforeResetDb
+      .collection("vehicles")
+      .doc("veh_stale_owner")
+      .set(validVehiclePayload("veh_stale_owner"))
+  );
+  await assertFails(
+    staleOtherAdminDb
+      .collection("vehicles")
+      .doc("veh_stale_mgr")
+      .set(validVehiclePayload("veh_stale_mgr"))
+  );
+  await assertFails(ownerBeforeResetDb.collection("inquiries").get());
+  await assertFails(ownerBeforeResetDb.collection("adminSessions").get());
+  await assertFails(ownerBeforeResetDb.collection("loginAlerts").get());
+  await assertFails(ownerBeforeResetDb.collection("config").doc("adminAccess").get());
+  await assertFails(
+    staleOtherAdminDb
+      .collection("adminSessions")
+      .doc("sess_stale_1")
+      .set(validAdminSessionPayload("sess_stale_1", "mgr_uid", { email: OTHER_ADMIN_EMAIL }))
+  );
+
+  // Freshly signed-in admin (auth_time >= forceSignOutBefore) regains full access!
+  await assertSucceeds(
+    freshOwnerDb
+      .collection("vehicles")
+      .doc("veh_fresh_owner")
+      .set(validVehiclePayload("veh_fresh_owner"))
+  );
+  await assertSucceeds(freshOwnerDb.collection("inquiries").get());
+  await assertSucceeds(freshOwnerDb.collection("adminSessions").get());
+  await assertSucceeds(
+    freshOwnerDb
+      .collection("adminSessions")
+      .doc("sess_fresh_owner")
+      .set(validAdminSessionPayload("sess_fresh_owner", "owner_uid"))
+  );
+
+  // Public customer showroom still works normally
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertSucceeds(unauthDb.collection("vehicles").get());
+});
+
+test("config/authenticator: enforces admin-only access and strict Base32 TOTP schema", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const validEnablePayload = {
+    enabled: true,
+    secretBase32: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+    accountLabel: BOOTSTRAP_EMAIL,
+    issuer: "Alif Car Import",
+    updatedByEmail: BOOTSTRAP_EMAIL,
+    updatedAt: pastTimestamp(1000),
+  };
+
+  // Unauthenticated and non-admin cannot read or write config/authenticator
+  await assertFails(unauthDb.collection("config").doc("authenticator").get());
+  await assertFails(unauthDb.collection("config").doc("authenticator").set(validEnablePayload));
+  await assertFails(nonAdminDb.collection("config").doc("authenticator").get());
+  await assertFails(nonAdminDb.collection("config").doc("authenticator").set(validEnablePayload));
+
+  // Invalid payloads rejected even for admin (enabled with bad secret, disabled with non-empty secret)
+  await assertFails(
+    ownerDb.collection("config").doc("authenticator").set({
+      ...validEnablePayload,
+      secretBase32: "invalid-lowercase-189",
+    })
+  );
+  await assertFails(
+    ownerDb.collection("config").doc("authenticator").set({
+      ...validEnablePayload,
+      enabled: false,
+      secretBase32: "JBSWY3DPEHPK3PXP",
+    })
+  );
+
+  // Verified admin can enable with valid Base32 secret, read it, and disable by clearing secret
+  await assertSucceeds(ownerDb.collection("config").doc("authenticator").set(validEnablePayload));
+  await assertSucceeds(ownerDb.collection("config").doc("authenticator").get());
+  await assertSucceeds(
+    ownerDb.collection("config").doc("authenticator").set({
+      enabled: false,
+      secretBase32: "",
+      accountLabel: BOOTSTRAP_EMAIL,
+      issuer: "Alif Car Import",
+      updatedByEmail: BOOTSTRAP_EMAIL,
+      updatedAt: pastTimestamp(500),
+    })
+  );
+  await assertFails(ownerDb.collection("config").doc("authenticator").delete());
+});
+

@@ -65,6 +65,7 @@ import java.util.Locale
 sealed interface AdminAuthorizationState {
     data object Checking : AdminAuthorizationState
     data object Authorized : AdminAuthorizationState
+    data class SessionExpired(val email: String) : AdminAuthorizationState
     data class Denied(val email: String) : AdminAuthorizationState
     data class Error(val email: String, val message: String) : AdminAuthorizationState
 }
@@ -102,15 +103,38 @@ fun observeAdminAuthorization(
         return@flow
     }
 
+    emit(AdminAuthorizationState.Checking)
+
+    // Ensure fresh ID token & read real JWT auth_time before checking Firestore rules
+    val tokenAuthTimeMillis = runCatching {
+        user.getIdToken(false).await().authTimestamp * 1000L
+    }.getOrDefault(0L)
+    val userAuthTimeMillis = tokenAuthTimeMillis.takeIf { it > 0L }
+        ?: (user.metadata?.lastSignInTimestamp ?: 0L)
+
+    // Server-side global sign-out check: if an admin triggered "Sign Out All Devices"
+    // after this user signed in, expire this session immediately before showing any data.
+    val cutoffMillis = try {
+        val secSnap = db.collection("config")
+            .document("security")
+            .get(Source.SERVER)
+            .await()
+        secSnap.getTimestamp("forceSignOutBefore")?.toDate()?.time
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+
+    if (cutoffMillis != null && userAuthTimeMillis > 0L && userAuthTimeMillis < cutoffMillis) {
+        emit(AdminAuthorizationState.SessionExpired(rawEmail))
+        return@flow
+    }
+
     if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
         emit(AdminAuthorizationState.Authorized)
         return@flow
     }
-
-    emit(AdminAuthorizationState.Checking)
-
-    // Ensure fresh ID token before checking Firestore admin access rules
-    runCatching { user.getIdToken(false).await() }
 
     val isExplicitUidAdmin = try {
         db.collection("admins")

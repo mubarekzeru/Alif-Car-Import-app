@@ -5,10 +5,14 @@ import android.os.Build
 import android.util.Log
 import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.AdminDeviceStatus
+import com.example.data.model.AuthenticatorStatus
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
+import com.example.data.model.PendingAuthenticatorSetup
 import com.example.data.model.SecurityLockHelper
+import com.example.data.security.TotpAuthenticator
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
@@ -64,9 +68,22 @@ class SecuritySessionRepository(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    private val _authenticatorStatus = MutableStateFlow(AuthenticatorStatus())
+    val authenticatorStatus: StateFlow<AuthenticatorStatus> = _authenticatorStatus.asStateFlow()
+
     private var remoteSessionsListener: ListenerRegistration? = null
     private var remoteAlertsListener: ListenerRegistration? = null
+    private var securityPolicyListener: ListenerRegistration? = null
+    private var authenticatorListener: ListenerRegistration? = null
     private var activeAlertCallback: ((LoginSecurityAlert) -> Unit)? = null
+    @Volatile
+    private var currentAuthTimeMillis: Long = 0L
+    @Volatile
+    private var activeTotpSecret: String = ""
+    @Volatile
+    private var failedTotpAttempts: Int = 0
+    @Volatile
+    private var totpLockoutUntilMillis: Long = 0L
 
     init {
         loadFromLocalPrefs()
@@ -155,6 +172,34 @@ class SecuritySessionRepository(
                             activeAlertCallback?.invoke(alert)
                         }
                 }
+            securityPolicyListener = db.collection(COL_CONFIG)
+                .document(DOC_SECURITY)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        handleFirestoreError(error, OperationType.GET, "$COL_CONFIG/$DOC_SECURITY")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val cutoffMillis = snapshot.getTimestamp(
+                        "forceSignOutBefore",
+                        com.google.firebase.firestore.DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )?.toDate()?.time ?: return@addSnapshotListener
+                    val authTime = currentAuthTimeMillis.takeIf { it > 0L }
+                        ?: auth.currentUser?.metadata?.lastSignInTimestamp
+                        ?: 0L
+                    if (authTime > 0L && authTime < cutoffMillis) {
+                        _isCurrentSessionRevoked.value = true
+                    }
+                }
+            authenticatorListener = db.collection(COL_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        handleFirestoreError(error, OperationType.GET, "$COL_CONFIG/$DOC_AUTHENTICATOR")
+                        return@addSnapshotListener
+                    }
+                    applyAuthenticatorSnapshot(snapshot)
+                }
         }.onFailure { err ->
             handleFirestoreError(err, OperationType.LIST, COL_ADMIN_SESSIONS)
             _cloudSyncError.value = "Unable to start live device sync."
@@ -166,6 +211,10 @@ class SecuritySessionRepository(
         remoteSessionsListener = null
         remoteAlertsListener?.remove()
         remoteAlertsListener = null
+        securityPolicyListener?.remove()
+        securityPolicyListener = null
+        authenticatorListener?.remove()
+        authenticatorListener = null
         activeAlertCallback = null
     }
 
@@ -179,6 +228,10 @@ class SecuritySessionRepository(
         val email = user.email.orEmpty().trim()
         val now = System.currentTimeMillis()
         val authSignInTs = user.metadata?.lastSignInTimestamp ?: 0L
+        val tokenAuthTimeMillis = runCatching {
+            user.getIdToken(false).await().authTimestamp * 1000L
+        }.getOrDefault(0L)
+        currentAuthTimeMillis = tokenAuthTimeMillis.takeIf { it > 0L } ?: authSignInTs
         val lastRecordedAuthTs = prefs.getLong(KEY_LAST_AUTH_SIGNIN_TS, 0L)
         val lastRecordedUid = prefs.getString(KEY_LAST_UID, null)
 
@@ -329,6 +382,14 @@ class SecuritySessionRepository(
                 .forEach { alert ->
                     activeAlertCallback?.invoke(alert)
                 }
+
+            runCatching {
+                val authSnap = db.collection(COL_CONFIG)
+                    .document(DOC_AUTHENTICATOR)
+                    .get(Source.SERVER)
+                    .await()
+                applyAuthenticatorSnapshot(authSnap)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -371,7 +432,10 @@ class SecuritySessionRepository(
         }
     }
 
-    fun deactivateOtherSession(sessionId: String): Result<Unit> {
+    fun deactivateOtherSession(
+        sessionId: String,
+        totpCode: String = ""
+    ): Result<Unit> {
         val target = _sessions.value.firstOrNull { it.id == sessionId }
             ?: return Result.failure(IllegalStateException("Device session not found."))
 
@@ -393,8 +457,223 @@ class SecuritySessionRepository(
             )
         }
 
+        val totpCheck = verifyProtectedActionTotp(totpCode, "remove an active device")
+        if (totpCheck.isFailure) return totpCheck
+
         revokeSessionImmediate(sessionId)
         return Result.success(Unit)
+    }
+
+    fun createPendingAuthenticatorSetup(): Result<PendingAuthenticatorSetup> {
+        val user = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before setting up Authenticator."))
+        val email = user.email?.trim()?.takeIf { it.isNotEmpty() } ?: "admin"
+        val secret = TotpAuthenticator.generateSecretBase32()
+        val uri = TotpAuthenticator.buildOtpAuthUri(
+            accountEmail = email,
+            secretBase32 = secret,
+            issuer = TotpAuthenticator.DEFAULT_ISSUER
+        )
+        return Result.success(
+            PendingAuthenticatorSetup(
+                secretBase32 = secret,
+                formattedSecret = TotpAuthenticator.formatSecretForDisplay(secret),
+                otpAuthUri = uri,
+                accountEmail = email,
+                issuer = TotpAuthenticator.DEFAULT_ISSUER
+            )
+        )
+    }
+
+    suspend fun enableAuthenticator(
+        secretBase32: String,
+        verificationCode: String
+    ): Result<String> {
+        val user = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before enabling Authenticator."))
+        val cleanSecret = TotpAuthenticator.normalizeBase32(secretBase32)
+        if (!TotpAuthenticator.isValidSecretBase32(cleanSecret)) {
+            return Result.failure(IllegalArgumentException("Setup key is invalid. Generate a fresh Authenticator link and try again."))
+        }
+        val cleanCode = TotpAuthenticator.sanitizeCodeInput(verificationCode)
+        if (cleanCode.length != TotpAuthenticator.DEFAULT_DIGITS) {
+            return Result.failure(IllegalArgumentException("Paste or enter the 6-digit code from Google Authenticator."))
+        }
+        if (!TotpAuthenticator.verifyCode(cleanSecret, cleanCode)) {
+            return Result.failure(IllegalArgumentException("Incorrect 6-digit code. Make sure you added this link/key to Google Authenticator and enter the current code."))
+        }
+
+        val email = user.email.orEmpty().trim().take(254)
+        val payload = mapOf(
+            "enabled" to true,
+            "secretBase32" to cleanSecret,
+            "accountLabel" to email,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        return try {
+            db.collection(COL_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+            activeTotpSecret = cleanSecret
+            failedTotpAttempts = 0
+            totpLockoutUntilMillis = 0L
+            _authenticatorStatus.value = AuthenticatorStatus(
+                enabled = true,
+                accountLabel = email,
+                updatedByEmail = email,
+                updatedAtMillis = System.currentTimeMillis(),
+                isLoaded = true
+            )
+            Result.success("Google Authenticator enabled. Removing active devices, changing password, and disabling 2FA now require a 6-digit code.")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "$COL_CONFIG/$DOC_AUTHENTICATOR")
+            Result.failure(
+                IllegalStateException(
+                    e.localizedMessage ?: "Unable to enable Google Authenticator right now."
+                )
+            )
+        }
+    }
+
+    suspend fun disableAuthenticator(verificationCode: String): Result<String> {
+        val user = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before disabling Authenticator."))
+
+        // Ensure we have the latest server-side Authenticator state before verifying
+        if (!_authenticatorStatus.value.isLoaded || (_authenticatorStatus.value.enabled && activeTotpSecret.isBlank())) {
+            runCatching {
+                val snap = db.collection(COL_CONFIG)
+                    .document(DOC_AUTHENTICATOR)
+                    .get(Source.SERVER)
+                    .await()
+                applyAuthenticatorSnapshot(snap)
+            }
+        }
+
+        if (!_authenticatorStatus.value.enabled) {
+            return Result.success("Google Authenticator is already disabled.")
+        }
+
+        val totpCheck = verifyProtectedActionTotp(verificationCode, "disable Google Authenticator")
+        if (totpCheck.isFailure) {
+            return Result.failure(
+                totpCheck.exceptionOrNull()
+                    ?: IllegalArgumentException("Valid 6-digit Google Authenticator code is required to disable.")
+            )
+        }
+
+        val email = user.email.orEmpty().trim().take(254)
+        val payload = mapOf(
+            "enabled" to false,
+            "secretBase32" to "",
+            "accountLabel" to email,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        return try {
+            db.collection(COL_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+            activeTotpSecret = ""
+            failedTotpAttempts = 0
+            totpLockoutUntilMillis = 0L
+            _authenticatorStatus.value = AuthenticatorStatus(
+                enabled = false,
+                accountLabel = email,
+                updatedByEmail = email,
+                updatedAtMillis = System.currentTimeMillis(),
+                isLoaded = true
+            )
+            Result.success("Google Authenticator disabled.")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "$COL_CONFIG/$DOC_AUTHENTICATOR")
+            Result.failure(
+                IllegalStateException(
+                    e.localizedMessage ?: "Unable to disable Google Authenticator right now."
+                )
+            )
+        }
+    }
+
+    private fun verifyProtectedActionTotp(
+        totpCode: String,
+        actionDescription: String
+    ): Result<Unit> {
+        if (!_authenticatorStatus.value.enabled) {
+            return Result.success(Unit)
+        }
+
+        val now = System.currentTimeMillis()
+        if (now < totpLockoutUntilMillis) {
+            val secondsLeft = ((totpLockoutUntilMillis - now + 999L) / 1000L).coerceAtLeast(1L)
+            return Result.failure(
+                IllegalStateException("Too many incorrect authenticator codes. Try again in ${secondsLeft}s.")
+            )
+        }
+
+        val cleanCode = TotpAuthenticator.sanitizeCodeInput(totpCode)
+        if (cleanCode.length != TotpAuthenticator.DEFAULT_DIGITS) {
+            return Result.failure(
+                IllegalArgumentException("Enter or paste the 6-digit Google Authenticator code to $actionDescription.")
+            )
+        }
+
+        val secret = activeTotpSecret
+        if (secret.isBlank()) {
+            return Result.failure(
+                IllegalStateException("Authenticator verification is syncing. Refresh Settings and try again.")
+            )
+        }
+
+        val valid = TotpAuthenticator.verifyCode(secretBase32 = secret, userCode = cleanCode, timeMillis = now)
+        if (!valid) {
+            failedTotpAttempts += 1
+            if (failedTotpAttempts >= MAX_TOTP_ATTEMPTS_BEFORE_COOLDOWN) {
+                totpLockoutUntilMillis = now + TOTP_COOLDOWN_MILLIS
+                failedTotpAttempts = 0
+                return Result.failure(
+                    IllegalStateException("Too many incorrect codes. Wait 30 seconds and paste a fresh code from Google Authenticator.")
+                )
+            }
+            return Result.failure(
+                IllegalArgumentException("Incorrect Google Authenticator code. Check the current 6-digit code and try again.")
+            )
+        }
+
+        failedTotpAttempts = 0
+        totpLockoutUntilMillis = 0L
+        return Result.success(Unit)
+    }
+
+    private fun applyAuthenticatorSnapshot(snapshot: DocumentSnapshot?) {
+        if (snapshot == null || !snapshot.exists()) {
+            activeTotpSecret = ""
+            _authenticatorStatus.value = AuthenticatorStatus(
+                enabled = false,
+                isLoaded = true
+            )
+            return
+        }
+        val enabled = snapshot.getBoolean("enabled") == true
+        val secret = snapshot.getString("secretBase32").orEmpty().trim()
+        val effectiveEnabled = enabled && TotpAuthenticator.isValidSecretBase32(secret)
+        activeTotpSecret = if (effectiveEnabled) secret else ""
+        _authenticatorStatus.value = AuthenticatorStatus(
+            enabled = effectiveEnabled,
+            accountLabel = snapshot.getString("accountLabel").orEmpty().trim(),
+            updatedByEmail = snapshot.getString("updatedByEmail").orEmpty().trim(),
+            updatedAtMillis = snapshot.getTimestamp("updatedAt")?.toDate()?.time ?: 0L,
+            isLoaded = true
+        )
     }
 
     private fun revokeSessionImmediate(sessionId: String) {
@@ -425,7 +704,8 @@ class SecuritySessionRepository(
     suspend fun changePasswordWith24hGuard(
         oldPassword: String,
         newPassword: String,
-        confirmPassword: String
+        confirmPassword: String,
+        totpCode: String = ""
     ): Result<String> {
         val loginAt = _currentLoginAtMillis.value
         if (!SecurityLockHelper.isUnlockedAfter24Hours(loginAt)) {
@@ -434,6 +714,14 @@ class SecuritySessionRepository(
             )
             return Result.failure(
                 IllegalStateException("Access will unlock after 24 hours ($remaining).")
+            )
+        }
+
+        val totpCheck = verifyProtectedActionTotp(totpCode, "change the admin password")
+        if (totpCheck.isFailure) {
+            return Result.failure(
+                totpCheck.exceptionOrNull()
+                    ?: IllegalArgumentException("Google Authenticator code is required.")
             )
         }
 
@@ -456,15 +744,48 @@ class SecuritySessionRepository(
             ?.takeIf { it.isNotEmpty() }
             ?: return Result.failure(IllegalStateException("Account email not available for re-authentication."))
 
+        val hasPasswordProvider = user.providerData.any {
+            it.providerId == EmailAuthProvider.PROVIDER_ID
+        }
+        if (!hasPasswordProvider) {
+            return Result.failure(
+                IllegalStateException(
+                    "This admin account currently uses Google Sign-In only and does not have an email password set yet. Sign out and tap 'Forgot password?' on the sign-in screen to create one unified password for both the Mobile App and Website Admin page."
+                )
+            )
+        }
+
         return try {
             val credential = EmailAuthProvider.getCredential(email, oldPassword)
             user.reauthenticate(credential).await()
             user.updatePassword(newPassword).await()
-            Result.success("Password changed successfully.")
+
+            // Force-refresh ID token so current phone holds the freshly re-authenticated auth_time
+            val freshAuthSeconds = runCatching {
+                user.getIdToken(true).await().authTimestamp
+            }.getOrDefault(0L)
+            if (freshAuthSeconds > 0L) {
+                currentAuthTimeMillis = freshAuthSeconds * 1000L
+            }
+
+            // Immediately sign out all OTHER active sessions (including Website admin tabs and other phones)
+            // and raise the server-side security cutoff to this phone's fresh auth_time so stale devices
+            // must sign in again using the new unified password.
+            val revokedOthers = revokeOtherSessionsAfterPasswordChange(
+                currentUser = user,
+                freshAuthSeconds = freshAuthSeconds
+            )
+
+            val successMsg = if (revokedOthers > 0) {
+                "Password updated for both the Mobile App and Website Admin page. Signed out $revokedOthers other active session(s)."
+            } else {
+                "Password updated for both the Mobile App and Website Admin page. Any other device must now sign in with the new password."
+            }
+            Result.success(successMsg)
         } catch (e: CancellationException) {
             throw e
         } catch (e: FirebaseAuthInvalidCredentialsException) {
-            Result.failure(IllegalStateException("Previous password is incorrect. If you use Google Sign-In only, manage your password in Google Account settings."))
+            Result.failure(IllegalStateException("Previous password is incorrect. Enter your current unified App & Website admin password."))
         } catch (e: Exception) {
             Log.w(TAG, "Password change failed", e)
             Result.failure(
@@ -473,6 +794,72 @@ class SecuritySessionRepository(
                 )
             )
         }
+    }
+
+    private suspend fun revokeOtherSessionsAfterPasswordChange(
+        currentUser: FirebaseUser,
+        freshAuthSeconds: Long
+    ): Int {
+        val myId = currentSessionId(currentUser.uid)
+        var revokedCount = 0
+
+        runCatching {
+            val snapshot = withTimeoutOrNull(6000L) {
+                runCatching {
+                    db.collection(COL_ADMIN_SESSIONS).get(Source.SERVER).await()
+                }.getOrElse {
+                    db.collection(COL_ADMIN_SESSIONS).get().await()
+                }
+            }
+
+            val otherActiveRefs = snapshot?.documents
+                ?.filter { doc ->
+                    doc.id != myId &&
+                        (doc.getString("status") ?: "").trim().lowercase() != AdminDeviceStatus.REVOKED.value
+                }
+                ?.map { it.reference }
+                .orEmpty()
+
+            if (otherActiveRefs.isNotEmpty()) {
+                val payload = mapOf(
+                    "status" to AdminDeviceStatus.REVOKED.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                otherActiveRefs.chunked(50).forEach { chunk ->
+                    val batch = db.batch()
+                    chunk.forEach { ref -> batch.update(ref, payload) }
+                    withTimeoutOrNull(6000L) {
+                        batch.commit().await()
+                    }
+                    revokedCount += chunk.size
+                }
+            }
+
+            _sessions.value = _sessions.value.filter { it.id == myId || it.isCurrentDevice }
+            saveLocalPrefs()
+
+            // Advance server-side cutoff to freshAuthSeconds (whole seconds <= request.time).
+            // Current phone's JWT has auth_time == freshAuthSeconds so it passes (auth_time * 1000 >= cutoff),
+            // while all earlier website tabs / phones / old APKs are immediately blocked by Firestore Rules.
+            if (freshAuthSeconds > 0L) {
+                val securityPayload = mapOf(
+                    "forceSignOutBefore" to Timestamp(freshAuthSeconds, 0),
+                    "triggeredByEmail" to currentUser.email.orEmpty().trim().take(254),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                withTimeoutOrNull(6000L) {
+                    db.collection(COL_CONFIG)
+                        .document(DOC_SECURITY)
+                        .set(securityPayload)
+                        .await()
+                }
+            }
+        }.onFailure { err ->
+            if (err is CancellationException) throw err
+            Log.w(TAG, "Post-password-change session revocation encountered an error", err)
+        }
+
+        return revokedCount
     }
 
     suspend fun markCurrentSessionSignedOut() = withContext(NonCancellable) {
@@ -504,6 +891,97 @@ class SecuritySessionRepository(
         _currentLoginAtMillis.value = 0L
         _isCurrentSessionRevoked.value = false
         saveLocalPrefs()
+    }
+
+    suspend fun revokeAllActiveSessionsAndSignOut(totpCode: String = ""): Result<Int> = withContext(NonCancellable) {
+        val totpCheck = verifyProtectedActionTotp(totpCode, "sign out all active devices")
+        if (totpCheck.isFailure) {
+            return@withContext Result.failure(
+                totpCheck.exceptionOrNull()
+                    ?: IllegalArgumentException("Google Authenticator code is required.")
+            )
+        }
+
+        val currentUser = auth.currentUser
+        val myId = currentSessionId(currentUser?.uid)
+        stopObservingCloudSecurity()
+
+        var revokedCount = 0
+        var lastError: Exception? = null
+
+        if (currentUser != null) {
+            try {
+                val snapshot = withTimeoutOrNull(6000L) {
+                    runCatching {
+                        db.collection(COL_ADMIN_SESSIONS).get(Source.SERVER).await()
+                    }.getOrElse {
+                        db.collection(COL_ADMIN_SESSIONS).get().await()
+                    }
+                }
+
+                val targetRefs = snapshot?.documents
+                    ?.filter { doc ->
+                        val status = (doc.getString("status") ?: "").trim().lowercase()
+                        status != AdminDeviceStatus.REVOKED.value
+                    }
+                    ?.map { it.reference }
+                    ?.toMutableList()
+                    ?: mutableListOf()
+
+                if (targetRefs.none { it.id == myId } && snapshot?.documents?.any { it.id == myId } == true) {
+                    targetRefs.add(db.collection(COL_ADMIN_SESSIONS).document(myId))
+                }
+
+                val payload = mapOf(
+                    "status" to AdminDeviceStatus.REVOKED.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+
+                targetRefs.chunked(50).forEach { chunk ->
+                    val batch = db.batch()
+                    chunk.forEach { ref -> batch.update(ref, payload) }
+                    withTimeoutOrNull(6000L) {
+                        batch.commit().await()
+                    }
+                    revokedCount += chunk.size
+                }
+
+                // Write server-side global cutoff timestamp so Firestore Security Rules immediately block
+                // ALL pre-existing sessions—including older, un-updated APKs and stale website browser tabs—
+                // until they sign in again with a fresh Firebase Auth token (auth_time >= forceSignOutBefore).
+                val securityPayload = mapOf(
+                    "forceSignOutBefore" to FieldValue.serverTimestamp(),
+                    "triggeredByEmail" to currentUser.email.orEmpty().trim().take(254),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                withTimeoutOrNull(6000L) {
+                    db.collection(COL_CONFIG)
+                        .document(DOC_SECURITY)
+                        .set(securityPayload)
+                        .await()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                handleFirestoreError(e, OperationType.UPDATE, COL_ADMIN_SESSIONS)
+            }
+        }
+
+        _sessions.value = emptyList()
+        prefs.edit()
+            .remove(KEY_LOGIN_AT_MILLIS)
+            .remove(KEY_LAST_AUTH_SIGNIN_TS)
+            .apply()
+        _currentLoginAtMillis.value = 0L
+        _isCurrentSessionRevoked.value = false
+        saveLocalPrefs()
+
+        if (lastError != null && revokedCount == 0) {
+            Result.failure(lastError)
+        } else {
+            Result.success(revokedCount)
+        }
     }
 
     private suspend fun mirrorSessionToCloud(uid: String, session: ActiveDeviceSession) {
@@ -933,6 +1411,11 @@ class SecuritySessionRepository(
 
         const val COL_ADMIN_SESSIONS = "adminSessions"
         const val COL_LOGIN_ALERTS = "loginAlerts"
+        const val COL_CONFIG = "config"
+        const val DOC_SECURITY = "security"
+        const val DOC_AUTHENTICATOR = "authenticator"
+        const val MAX_TOTP_ATTEMPTS_BEFORE_COOLDOWN = 5
+        const val TOTP_COOLDOWN_MILLIS = 30_000L
         const val SYNTHETIC_ALERT_PREFIX = "sess_alert_"
         val ID_SANITIZE_REGEX = Regex("[^a-zA-Z0-9_-]")
     }

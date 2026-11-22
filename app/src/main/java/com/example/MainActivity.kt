@@ -236,10 +236,18 @@ fun LotPulseApp(
         }
     }
 
+    LaunchedEffect(adminAuthState) {
+        if (adminAuthState is AdminAuthorizationState.SessionExpired) {
+            skipAutoSignIn = true
+            signOut(credentialManager = credentialManager, scope = scope)
+        }
+    }
+
     val stage = when {
         showLaunchSplash -> AppRootStage.SPLASH
         verifiedUser == null -> AppRootStage.AUTH
-        adminAuthState is AdminAuthorizationState.Checking -> AppRootStage.VERIFYING_ADMIN
+        adminAuthState is AdminAuthorizationState.Checking ||
+            adminAuthState is AdminAuthorizationState.SessionExpired -> AppRootStage.VERIFYING_ADMIN
         adminAuthState is AdminAuthorizationState.Authorized -> AppRootStage.AUTHENTICATED
         else -> AppRootStage.UNAUTHORIZED
     }
@@ -478,6 +486,9 @@ private fun AuthenticatedLotAdmin(
     val currentLoginAtMillis by portalViewModel.currentLoginAtMillis.collectAsStateWithLifecycle()
     val securitySyncError by portalViewModel.securitySyncError.collectAsStateWithLifecycle()
     val isRefreshingSessions by portalViewModel.isRefreshingSessions.collectAsStateWithLifecycle()
+    val isSigningOutAll by portalViewModel.isSigningOutAll.collectAsStateWithLifecycle()
+    val authenticatorStatus by portalViewModel.authenticatorStatus.collectAsStateWithLifecycle()
+    val isMutatingAuthenticator by portalViewModel.isMutatingAuthenticator.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -699,7 +710,23 @@ private fun AuthenticatedLotAdmin(
                 onBack = { navController.popBackStack() },
                 securitySyncError = securitySyncError,
                 isRefreshingSessions = isRefreshingSessions,
-                onRefreshSessions = portalViewModel::refreshActiveSessions
+                onRefreshSessions = portalViewModel::refreshActiveSessions,
+                isSigningOutAll = isSigningOutAll,
+                onSignOutAllDevicesClick = { totpCode, onResult ->
+                    scope.launch {
+                        val result = portalViewModel.prepareSignOutAllDevices(totpCode)
+                        onResult(result)
+                        if (result.isSuccess) {
+                            onWillSignOut()
+                            signOut(credentialManager = credentialManager, scope = scope)
+                        }
+                    }
+                },
+                authenticatorStatus = authenticatorStatus,
+                isMutatingAuthenticator = isMutatingAuthenticator,
+                onCreatePendingAuthenticatorSetup = portalViewModel::createPendingAuthenticatorSetup,
+                onEnableAuthenticator = portalViewModel::enableAuthenticator,
+                onDisableAuthenticator = portalViewModel::disableAuthenticator
             )
         }
 

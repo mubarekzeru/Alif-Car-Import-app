@@ -73,6 +73,22 @@ data class PasswordChangeOutcome(
     val message: String
 )
 
+data class AuthenticatorStatus(
+    val enabled: Boolean = false,
+    val accountLabel: String = "",
+    val updatedByEmail: String = "",
+    val updatedAtMillis: Long = 0L,
+    val isLoaded: Boolean = false
+)
+
+data class PendingAuthenticatorSetup(
+    val secretBase32: String,
+    val formattedSecret: String,
+    val otpAuthUri: String,
+    val accountEmail: String,
+    val issuer: String
+)
+
 object SecurityLockHelper {
     const val TWENTY_FOUR_HOURS_MILLIS: Long = 24L * 60L * 60L * 1000L
 

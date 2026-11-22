@@ -73,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,10 +87,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ActiveDeviceSession
+import com.example.data.model.AuthenticatorStatus
+import com.example.data.model.PendingAuthenticatorSetup
 import com.example.data.model.SecurityLockHelper
 import com.example.ui.theme.EmeraldAvailable
 import com.example.ui.theme.EmeraldContainer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,16 +103,26 @@ fun AccountSettingsScreen(
     isMutatingPassword: Boolean,
     snackbarMessage: String?,
     onConsumeSnackbar: () -> Unit,
-    onDeactivateDevice: (String) -> Result<Unit>,
-    onChangePassword: (oldPassword: String, newPassword: String, confirmPassword: String, onComplete: (Result<String>) -> Unit) -> Unit,
+    onDeactivateDevice: (sessionId: String, totpCode: String) -> Result<Unit>,
+    onChangePassword: (oldPassword: String, newPassword: String, confirmPassword: String, totpCode: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onOpenContactSocialLocation: () -> Unit,
     onOpenAdminAccess: () -> Unit,
     onSignOutClick: () -> Unit,
     onBack: () -> Unit,
     securitySyncError: String? = null,
     isRefreshingSessions: Boolean = false,
-    onRefreshSessions: () -> Unit = {}
+    onRefreshSessions: () -> Unit = {},
+    isSigningOutAll: Boolean = false,
+    onSignOutAllDevicesClick: (totpCode: String, onResult: (Result<Int>) -> Unit) -> Unit = { _, _ -> },
+    authenticatorStatus: AuthenticatorStatus = AuthenticatorStatus(),
+    isMutatingAuthenticator: Boolean = false,
+    onCreatePendingAuthenticatorSetup: () -> Result<PendingAuthenticatorSetup> = {
+        Result.failure(IllegalStateException("Authenticator setup unavailable"))
+    },
+    onEnableAuthenticator: (secretBase32: String, code: String, onComplete: (Result<String>) -> Unit) -> Unit = { _, _, _ -> },
+    onDisableAuthenticator: (code: String, onComplete: (Result<String>) -> Unit) -> Unit = { _, _ -> }
 ) {
+    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarMessage) {
         val message = snackbarMessage ?: return@LaunchedEffect
@@ -137,12 +151,18 @@ fun AccountSettingsScreen(
     )
 
     var selectedSessionDetail by remember { mutableStateOf<ActiveDeviceSession?>(null) }
+    var removeDeviceTotpInput by remember { mutableStateOf("") }
+    var removeDeviceDialogError by remember { mutableStateOf<String?>(null) }
     var deviceActionFeedback by remember { mutableStateOf<String?>(null) }
+    var showSignOutAllConfirmDialog by remember { mutableStateOf(false) }
+    var signOutAllTotpInput by remember { mutableStateOf("") }
+    var signOutAllDialogError by remember { mutableStateOf<String?>(null) }
 
     var showChangePasswordForm by remember { mutableStateOf(false) }
     var oldPasswordInput by remember { mutableStateOf("") }
     var newPasswordInput by remember { mutableStateOf("") }
     var confirmPasswordInput by remember { mutableStateOf("") }
+    var passwordTotpInput by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var passwordMessage by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
@@ -586,6 +606,40 @@ fun AccountSettingsScreen(
                     }
                 }
 
+                item(key = "active_devices_sign_out_all") {
+                    Button(
+                        onClick = { showSignOutAllConfirmDialog = true },
+                        enabled = !isSigningOutAll,
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("active_devices_sign_out_all_button")
+                    ) {
+                        if (isSigningOutAll) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onError,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Signing Out All Devices…", fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Logout,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Sign Out All Devices (App & Website)", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 item(key = "security_and_management_footer") {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
@@ -593,6 +647,17 @@ fun AccountSettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Bold
+                        )
+
+                        AuthenticatorSecurityCard(
+                            status = authenticatorStatus,
+                            isMutating = isMutatingAuthenticator,
+                            onCreatePendingSetup = onCreatePendingAuthenticatorSetup,
+                            onEnableAuthenticator = onEnableAuthenticator,
+                            onDisableAuthenticator = onDisableAuthenticator,
+                            onShowQuickFeedback = { msg ->
+                                scope.launch { snackbarHostState.showSnackbar(msg) }
+                            }
                         )
 
                         Card(
@@ -620,13 +685,13 @@ fun AccountSettingsScreen(
                                     )
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Change Password",
+                                            text = "Change Password (App & Website)",
                                             style = MaterialTheme.typography.titleSmall,
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
                                             text = if (isUnlocked) {
-                                                "Enter previous password and confirm your new password"
+                                                "One shared admin password for both Mobile App and Website Admin page. Changing it signs out other devices."
                                             } else {
                                                 "Access will unlock after 24 hours ($remainingCountdown)"
                                             },
@@ -708,6 +773,17 @@ fun AccountSettingsScreen(
                                                 .testTag("confirm_password_input")
                                         )
 
+                                        if (authenticatorStatus.enabled) {
+                                            TotpCodeInputField(
+                                                value = passwordTotpInput,
+                                                onValueChange = { passwordTotpInput = it },
+                                                label = "Google Authenticator 6-Digit Code",
+                                                enabled = !isMutatingPassword,
+                                                supportingText = "Required because Google Authenticator (2FA) is enabled",
+                                                testTag = "change_password_totp_input"
+                                            )
+                                        }
+
                                         passwordMessage?.let { (isOk, msg) ->
                                             Surface(
                                                 color = if (isOk) EmeraldContainer else MaterialTheme.colorScheme.errorContainer,
@@ -730,13 +806,15 @@ fun AccountSettingsScreen(
                                                 onChangePassword(
                                                     oldPasswordInput,
                                                     newPasswordInput,
-                                                    confirmPasswordInput
+                                                    confirmPasswordInput,
+                                                    passwordTotpInput
                                                 ) { result ->
                                                     result.onSuccess { okMsg ->
                                                         passwordMessage = true to okMsg
                                                         oldPasswordInput = ""
                                                         newPasswordInput = ""
                                                         confirmPasswordInput = ""
+                                                        passwordTotpInput = ""
                                                     }.onFailure { err ->
                                                         passwordMessage = false to (err.localizedMessage ?: "Failed to change password")
                                                     }
@@ -762,7 +840,7 @@ fun AccountSettingsScreen(
                                                 Spacer(modifier = Modifier.width(8.dp))
                                                 Text("Updating…")
                                             } else {
-                                                Text("Update Password", fontWeight = FontWeight.Bold)
+                                                Text("Update App & Website Password", fontWeight = FontWeight.Bold)
                                             }
                                         }
                                     }
@@ -793,8 +871,41 @@ fun AccountSettingsScreen(
                             testTag = "settings_contact_social_location_row"
                         )
 
+                        Button(
+                            onClick = { showSignOutAllConfirmDialog = true },
+                            enabled = !isSigningOutAll,
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("settings_sign_out_all_devices_button")
+                        ) {
+                            if (isSigningOutAll) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = MaterialTheme.colorScheme.onError,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Signing Out All Devices…", fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Devices,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sign Out All Devices (App & Website)", fontWeight = FontWeight.Bold)
+                            }
+                        }
+
                         OutlinedButton(
                             onClick = onSignOutClick,
+                            enabled = !isSigningOutAll,
                             shape = CircleShape,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f)),
                             colors = ButtonDefaults.outlinedButtonColors(
@@ -811,7 +922,7 @@ fun AccountSettingsScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sign Out", fontWeight = FontWeight.Bold)
+                            Text("Sign Out (This Phone)", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -819,9 +930,109 @@ fun AccountSettingsScreen(
         }
     }
 
+    if (showSignOutAllConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isSigningOutAll) {
+                    showSignOutAllConfirmDialog = false
+                    signOutAllTotpInput = ""
+                    signOutAllDialogError = null
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = {
+                Text(
+                    text = "Sign Out All Devices?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "This immediately revokes all active Mobile App and Website sessions and enforces a server-side cutoff that blocks even older, un-updated app versions and browser tabs until they sign in again fresh.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (authenticatorStatus.enabled) {
+                        TotpCodeInputField(
+                            value = signOutAllTotpInput,
+                            onValueChange = {
+                                signOutAllTotpInput = it
+                                signOutAllDialogError = null
+                            },
+                            label = "Google Authenticator 6-Digit Code",
+                            enabled = !isSigningOutAll,
+                            isError = signOutAllDialogError != null,
+                            testTag = "sign_out_all_totp_input"
+                        )
+                    }
+                    signOutAllDialogError?.let { errMsg ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = errMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        signOutAllDialogError = null
+                        onSignOutAllDevicesClick(signOutAllTotpInput) { result ->
+                            result.onSuccess {
+                                showSignOutAllConfirmDialog = false
+                                signOutAllTotpInput = ""
+                                signOutAllDialogError = null
+                            }.onFailure { err ->
+                                signOutAllDialogError = err.localizedMessage
+                                    ?: "Valid 6-digit Google Authenticator code is required."
+                            }
+                        }
+                    },
+                    enabled = !isSigningOutAll,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.testTag("confirm_sign_out_all_devices_button")
+                ) {
+                    Text(
+                        text = if (isSigningOutAll) "Verifying…" else "Sign Out All",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showSignOutAllConfirmDialog = false
+                        signOutAllTotpInput = ""
+                        signOutAllDialogError = null
+                    },
+                    enabled = !isSigningOutAll
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     selectedSessionDetail?.let { session ->
         AlertDialog(
-            onDismissRequest = { selectedSessionDetail = null },
+            onDismissRequest = {
+                selectedSessionDetail = null
+                removeDeviceTotpInput = ""
+                removeDeviceDialogError = null
+            },
             containerColor = MaterialTheme.colorScheme.surface,
             title = {
                 Text(
@@ -857,6 +1068,18 @@ fun AccountSettingsScreen(
                                 modifier = Modifier.padding(10.dp)
                             )
                         }
+                    } else if (!session.isCurrentDevice && authenticatorStatus.enabled) {
+                        TotpCodeInputField(
+                            value = removeDeviceTotpInput,
+                            onValueChange = {
+                                removeDeviceTotpInput = it
+                                removeDeviceDialogError = null
+                            },
+                            label = "Google Authenticator 6-Digit Code",
+                            isError = removeDeviceDialogError != null,
+                            supportingText = "Paste 6-digit code from Google Authenticator to log out this device",
+                            testTag = "remove_device_totp_input"
+                        )
                     } else if (session.isCurrentDevice) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -870,17 +1093,43 @@ fun AccountSettingsScreen(
                             )
                         }
                     }
+
+                    removeDeviceDialogError?.let { errMsg ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = errMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
                 if (!session.isCurrentDevice) {
                     Button(
                         onClick = {
-                            val result = onDeactivateDevice(session.id)
-                            selectedSessionDetail = null
-                            result.onFailure { err ->
-                                deviceActionFeedback = err.localizedMessage
+                            removeDeviceDialogError = null
+                            val result = onDeactivateDevice(session.id, removeDeviceTotpInput)
+                            result.onSuccess {
+                                selectedSessionDetail = null
+                                removeDeviceTotpInput = ""
+                                removeDeviceDialogError = null
+                            }.onFailure { err ->
+                                val msg = err.localizedMessage
                                     ?: "Access will unlock after 24 hours."
+                                if (authenticatorStatus.enabled) {
+                                    removeDeviceDialogError = msg
+                                } else {
+                                    selectedSessionDetail = null
+                                    deviceActionFeedback = msg
+                                }
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -894,7 +1143,13 @@ fun AccountSettingsScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { selectedSessionDetail = null }) {
+                TextButton(
+                    onClick = {
+                        selectedSessionDetail = null
+                        removeDeviceTotpInput = ""
+                        removeDeviceDialogError = null
+                    }
+                ) {
                     Text("Close")
                 }
             }

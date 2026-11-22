@@ -9,8 +9,10 @@ import com.example.data.firebase.InquiriesState
 import com.example.data.firebase.PortalRepository
 import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.model.ActiveDeviceSession
+import com.example.data.model.AuthenticatorStatus
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
+import com.example.data.model.PendingAuthenticatorSetup
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
@@ -78,6 +80,12 @@ class PortalViewModel(
     private val _isChangingPassword = MutableStateFlow(false)
     val isChangingPassword: StateFlow<Boolean> = _isChangingPassword.asStateFlow()
 
+    private val _isSigningOutAll = MutableStateFlow(false)
+    val isSigningOutAll: StateFlow<Boolean> = _isSigningOutAll.asStateFlow()
+
+    private val _isMutatingAuthenticator = MutableStateFlow(false)
+    val isMutatingAuthenticator: StateFlow<Boolean> = _isMutatingAuthenticator.asStateFlow()
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
@@ -90,6 +98,7 @@ class PortalViewModel(
     val isCurrentSessionRevoked: StateFlow<Boolean> = securityRepository.isCurrentSessionRevoked
     val securitySyncError: StateFlow<String?> = securityRepository.cloudSyncError
     val isRefreshingSessions: StateFlow<Boolean> = securityRepository.isRefreshing
+    val authenticatorStatus: StateFlow<AuthenticatorStatus> = securityRepository.authenticatorStatus
 
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
@@ -230,18 +239,60 @@ class PortalViewModel(
         _snackbarMessage.value = "Unrecognized session logged out immediately"
     }
 
-    fun deactivateOtherDevice(sessionId: String): Result<Unit> {
-        val result = securityRepository.deactivateOtherSession(sessionId)
+    fun deactivateOtherDevice(
+        sessionId: String,
+        totpCode: String = ""
+    ): Result<Unit> {
+        val result = securityRepository.deactivateOtherSession(
+            sessionId = sessionId,
+            totpCode = totpCode
+        )
         result.onSuccess {
             _snackbarMessage.value = "Removed active device session"
         }
         return result
     }
 
+    fun createPendingAuthenticatorSetup(): Result<PendingAuthenticatorSetup> =
+        securityRepository.createPendingAuthenticatorSetup()
+
+    fun enableAuthenticator(
+        secretBase32: String,
+        verificationCode: String,
+        onComplete: (Result<String>) -> Unit
+    ) {
+        if (_isMutatingAuthenticator.value) return
+        viewModelScope.launch {
+            _isMutatingAuthenticator.value = true
+            val result = securityRepository.enableAuthenticator(
+                secretBase32 = secretBase32,
+                verificationCode = verificationCode
+            )
+            _isMutatingAuthenticator.value = false
+            result.onSuccess { _snackbarMessage.value = "Google Authenticator enabled" }
+            onComplete(result)
+        }
+    }
+
+    fun disableAuthenticator(
+        verificationCode: String,
+        onComplete: (Result<String>) -> Unit
+    ) {
+        if (_isMutatingAuthenticator.value) return
+        viewModelScope.launch {
+            _isMutatingAuthenticator.value = true
+            val result = securityRepository.disableAuthenticator(verificationCode = verificationCode)
+            _isMutatingAuthenticator.value = false
+            result.onSuccess { _snackbarMessage.value = "Google Authenticator disabled" }
+            onComplete(result)
+        }
+    }
+
     fun changePassword(
         oldPassword: String,
         newPassword: String,
         confirmPassword: String,
+        totpCode: String = "",
         onComplete: (Result<String>) -> Unit
     ) {
         if (_isChangingPassword.value) return
@@ -250,7 +301,8 @@ class PortalViewModel(
             val result = securityRepository.changePasswordWith24hGuard(
                 oldPassword = oldPassword,
                 newPassword = newPassword,
-                confirmPassword = confirmPassword
+                confirmPassword = confirmPassword,
+                totpCode = totpCode
             )
             _isChangingPassword.value = false
             onComplete(result)
@@ -259,6 +311,16 @@ class PortalViewModel(
 
     suspend fun prepareSignOut() {
         securityRepository.markCurrentSessionSignedOut()
+    }
+
+    suspend fun prepareSignOutAllDevices(totpCode: String = ""): Result<Int> {
+        if (_isSigningOutAll.value) return Result.success(0)
+        _isSigningOutAll.value = true
+        return try {
+            securityRepository.revokeAllActiveSessionsAndSignOut(totpCode = totpCode)
+        } finally {
+            _isSigningOutAll.value = false
+        }
     }
 
     fun consumeSnackbar() {

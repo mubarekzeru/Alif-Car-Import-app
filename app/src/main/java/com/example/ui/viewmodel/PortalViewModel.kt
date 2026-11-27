@@ -21,7 +21,6 @@ import com.example.ui.components.BottomNavTab
 import com.example.ui.components.NotificationCenterTab
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -94,11 +93,8 @@ class PortalViewModel(
 
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
-            val firestoreError = generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            Log.w(TAG, "Error observing showroom config", firestoreError ?: error)
+            if (error is CancellationException) throw error
+            Log.w(TAG, "Error observing showroom config", error)
             emit(ShowroomConfig())
         }
         .stateIn(
@@ -109,11 +105,8 @@ class PortalViewModel(
 
     val tikTokPosts: StateFlow<List<TikTokPost>> = repository.observeTikTokPosts()
         .catch { error ->
-            val firestoreError = generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            Log.w(TAG, "Error observing tiktok posts", firestoreError ?: error)
+            if (error is CancellationException) throw error
+            Log.w(TAG, "Error observing tiktok posts", error)
             emit(emptyList())
         }
         .stateIn(
@@ -140,17 +133,10 @@ class PortalViewModel(
         repository.observeWebsiteVisitorStats(),
         _manualVisitorStats
     ) { live, manual ->
-        if (manual != null && manual.totalVisits > live.totalVisits) {
-            manual
-        } else {
-            live
-        }
+        manual ?: live
     }.catch { error ->
-        val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        Log.w(TAG, "Error observing website visitor stats", firestoreError ?: error)
+        if (error is CancellationException) throw error
+        Log.w(TAG, "Error observing website visitor stats", error)
         emit(WebsiteVisitorStats(isLoaded = true))
     }.stateIn(
         scope = viewModelScope,
@@ -167,6 +153,17 @@ class PortalViewModel(
                     _manualVisitorStats.value = stats
                 }
             _isRefreshingVisitorStats.value = false
+        }
+    }
+
+    fun refreshPortalDataOnResume() {
+        viewModelScope.launch {
+            repository.refreshShowroomData()
+            repository.refreshInquiries()
+            repository.refreshWebsiteVisitorStats()
+                .onSuccess { stats ->
+                    _manualVisitorStats.value = stats
+                }
         }
     }
 

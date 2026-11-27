@@ -43,30 +43,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import coil.compose.AsyncImage
 import com.example.R
-import com.example.data.firebase.OperationType
-import com.example.data.firebase.handleFirestoreError
+import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.model.AdminAccessConfig
-import android.content.Context
-import android.os.Build
+import com.example.data.network.CloudflareApiClient
 import com.example.data.security.TotpAuthenticator
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Source
-import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
-import java.util.TimeZone
-import java.util.UUID
 
 sealed interface AdminAuthorizationState {
     data object Checking : AdminAuthorizationState
@@ -106,7 +95,7 @@ object AdminAuthorizationPolicy {
 
 fun observeAdminAuthorization(
     context: Context,
-    db: FirebaseFirestore,
+    apiClient: CloudflareApiClient,
     user: FirebaseUser
 ): Flow<AdminAuthorizationState> = flow {
     val rawEmail = user.email.orEmpty().trim()
@@ -119,40 +108,12 @@ fun observeAdminAuthorization(
 
     emit(AdminAuthorizationState.Checking)
 
-    // Ensure fresh ID token & read real JWT auth_time (whole seconds) before checking Firestore rules
+    // Ensure a valid Firebase Auth ID token before proceeding
     val tokenAuthTimeSeconds = runCatching {
-        user.getIdToken(true).await().authTimestamp
-    }.recoverCatching {
         user.getIdToken(false).await().authTimestamp
     }.getOrDefault(0L)
     val userAuthTimeSeconds = tokenAuthTimeSeconds.takeIf { it > 0L }
         ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
-
-    // Server-side global sign-out check: if an admin triggered "Sign Out All Devices"
-    // after this user signed in, expire this session immediately before showing any data.
-    val cutoffSeconds = try {
-        val secSnap = db.collection("config")
-            .document("security")
-            .get(Source.SERVER)
-            .await()
-        secSnap.getTimestamp("forceSignOutBefore")?.seconds
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: Exception) {
-        runCatching {
-            db.collection("config")
-                .document("security")
-                .get(Source.CACHE)
-                .await()
-                .getTimestamp("forceSignOutBefore")
-                ?.seconds
-        }.getOrNull()
-    }
-
-    if (cutoffSeconds != null && userAuthTimeSeconds > 0L && userAuthTimeSeconds < cutoffSeconds) {
-        emit(AdminAuthorizationState.SessionExpired(rawEmail))
-        return@flow
-    }
 
     if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
         val alreadyVerified = LoginTwoFactorStore.isSessionVerified(
@@ -160,59 +121,23 @@ fun observeAdminAuthorization(
             uid = user.uid,
             authTimeSeconds = userAuthTimeSeconds
         )
-        val authSnap = try {
-            db.collection("config")
-                .document("authenticator")
-                .get(Source.SERVER)
-                .await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val cached = runCatching {
-                db.collection("config")
-                    .document("authenticator")
-                    .get(Source.CACHE)
-                    .await()
-            }.getOrNull()
-            if (cached != null) {
-                cached
-            } else if (alreadyVerified) {
-                emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = true))
-                return@flow
-            } else {
-                val firestoreError = unwrapFirestoreException(e)
-                if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
-                    null
-                } else {
-                    handleFirestoreError(e, OperationType.GET, "config/authenticator")
-                    emit(
-                        AdminAuthorizationState.Error(
-                            email = rawEmail,
-                            message = "Unable to check Google Authenticator status right now. Check your internet connection and tap Re-check."
-                        )
-                    )
-                    return@flow
-                }
-            }
-        }
-
-        val authEnabled = authSnap?.exists() == true && authSnap.getBoolean("enabled") == true
-        val requireOnLogin = authSnap?.getBoolean("requireOnLogin") ?: true
-        val secretBase32 = authSnap?.getString("secretBase32").orEmpty().trim()
-        val hasLoginAuthenticator = authEnabled && requireOnLogin && TotpAuthenticator.isValidSecretBase32(secretBase32)
+        val localAuth = SecuritySessionRepository.readLocalAuthenticatorConfig(context)
+        val hasLoginAuthenticator = localAuth.enabled &&
+            localAuth.requireOnLogin &&
+            TotpAuthenticator.isValidSecretBase32(localAuth.secretBase32)
 
         if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = rawEmail,
-                authenticatorEnabled = authEnabled,
-                secretBase32 = secretBase32,
+                authenticatorEnabled = localAuth.enabled,
+                secretBase32 = localAuth.secretBase32,
                 alreadyVerifiedForSession = alreadyVerified,
-                requireOnLogin = requireOnLogin
+                requireOnLogin = localAuth.requireOnLogin
             )
         ) {
             emit(
                 AdminAuthorizationState.RequiresAuthenticator(
                     email = rawEmail,
-                    secretBase32 = secretBase32,
+                    secretBase32 = localAuth.secretBase32,
                     authTimeSeconds = userAuthTimeSeconds
                 )
             )
@@ -223,153 +148,31 @@ fun observeAdminAuthorization(
         return@flow
     }
 
-    val isExplicitUidAdmin = try {
-        db.collection("admins")
-            .document(user.uid)
-            .get(Source.SERVER)
-            .await()
-            .exists()
+    // Verify admin access directly against the Cloudflare Worker API using the Firebase ID token
+    val checkResult = try {
+        apiClient.verifyAdminAccess()
     } catch (e: CancellationException) {
         throw e
-    } catch (e: Exception) {
-        val firestoreError = unwrapFirestoreException(e)
-        if (firestoreError?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-            false
-        } else {
-            handleFirestoreError(e, OperationType.GET, "admins/${user.uid}")
+    }
+
+    checkResult.fold(
+        onSuccess = { isAuthorized ->
+            if (isAuthorized) {
+                emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
+            } else {
+                emit(AdminAuthorizationState.Denied(rawEmail))
+            }
+        },
+        onFailure = { err ->
             emit(
                 AdminAuthorizationState.Error(
                     email = rawEmail,
-                    message = "Unable to verify admin approval right now. Check your internet connection and tap Re-check."
+                    message = err.localizedMessage
+                        ?: "Unable to verify admin approval right now. Check your internet connection and tap Re-check."
                 )
             )
-            return@flow
         }
-    }
-
-    // Server-verified authorization check against config/adminAccess (rules enforce isAdmin())
-    val initialApproved = try {
-        val accessSnap = db.collection("config")
-            .document("adminAccess")
-            .get(Source.SERVER)
-            .await()
-        val emails = (accessSnap.data?.get("adminEmails") as? List<*>)
-            ?.mapNotNull { it as? String }
-            .orEmpty()
-        AdminAuthorizationPolicy.isAuthorizedAdmin(
-            userEmail = rawEmail,
-            isEmailVerified = verified,
-            isExplicitUidAdmin = isExplicitUidAdmin,
-            allowlistedEmails = emails
-        )
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        val firestoreError = unwrapFirestoreException(e)
-        if (firestoreError?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-            false
-        } else {
-            handleFirestoreError(e, OperationType.GET, "config/adminAccess")
-            emit(
-                AdminAuthorizationState.Error(
-                    email = rawEmail,
-                    message = "Unable to verify admin approval right now. Check your internet connection and tap Re-check."
-                )
-            )
-            return@flow
-        }
-    }
-
-    if (!initialApproved) {
-        reportUnauthorizedAdminLoginAttempt(db, rawEmail)
-        emit(AdminAuthorizationState.Denied(rawEmail))
-        return@flow
-    }
-
-    emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
-
-    // Keep observing config/adminAccess in real time so if the owner revokes this admin email,
-    // access (including all vehicle listings) is revoked immediately.
-    emitAll(
-        db.collection("config")
-            .document("adminAccess")
-            .snapshots()
-            .map { snapshot ->
-                val emails = (snapshot.data?.get("adminEmails") as? List<*>)
-                    ?.mapNotNull { it as? String }
-                    .orEmpty()
-                val stillApproved = AdminAuthorizationPolicy.isAuthorizedAdmin(
-                    userEmail = rawEmail,
-                    isEmailVerified = verified,
-                    isExplicitUidAdmin = isExplicitUidAdmin,
-                    allowlistedEmails = emails
-                )
-                if (stillApproved) {
-                    AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false)
-                } else {
-                    AdminAuthorizationState.Denied(rawEmail)
-                }
-            }
-            .catch { error ->
-                val firestoreError = unwrapFirestoreException(error)
-                if (firestoreError == null && error is CancellationException) throw error
-                if (firestoreError?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                    emit(AdminAuthorizationState.Denied(rawEmail))
-                } else {
-                    handleFirestoreError(firestoreError ?: error, OperationType.GET, "config/adminAccess")
-                    emit(
-                        AdminAuthorizationState.Error(
-                            email = rawEmail,
-                            message = "Lost connection while verifying admin access. Tap Re-check to continue."
-                        )
-                    )
-                }
-            }
     )
-}
-
-private fun unwrapFirestoreException(error: Throwable): FirebaseFirestoreException? =
-    generateSequence(error) { it.cause }
-        .filterIsInstance<FirebaseFirestoreException>()
-        .firstOrNull()
-
-private suspend fun reportUnauthorizedAdminLoginAttempt(
-    db: FirebaseFirestore,
-    email: String
-) {
-    runCatching {
-        val attemptId = "att_app_${UUID.randomUUID().toString().replace("-", "").take(16)}"
-        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
-            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
-        val model = Build.MODEL.orEmpty().trim()
-        val combined = if (model.startsWith(manufacturer, ignoreCase = true)) {
-            model
-        } else {
-            "$manufacturer $model".trim()
-        }
-        val deviceName = "${combined.ifBlank { "Android Device" }} (Android ${Build.VERSION.RELEASE})".take(160)
-        val country = Locale.getDefault().displayCountry.takeIf { it.isNotBlank() }
-        val tzCity = TimeZone.getDefault().id.substringAfter('/', "").replace('_', ' ')
-        val location = listOfNotNull(
-            tzCity.takeIf { it.isNotBlank() },
-            country
-        ).joinToString(", ").ifBlank { TimeZone.getDefault().id }.take(160)
-
-        val payload = mapOf(
-            "id" to attemptId,
-            "email" to email.trim().take(254),
-            "deviceName" to deviceName,
-            "platform" to "Mobile App Admin",
-            "sourcePage" to "/admin/app-login",
-            "location" to location,
-            "status" to "denied",
-            "browser" to "Mobile App",
-            "reason" to "Unauthorized account attempted to sign into Admin App",
-            "timestampMillis" to System.currentTimeMillis(),
-            "createdAt" to FieldValue.serverTimestamp()
-        )
-        db.collection("adminLoginAttempts").document(attemptId).set(payload).await()
-    }
 }
 
 @Composable

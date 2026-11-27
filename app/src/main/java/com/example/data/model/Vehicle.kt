@@ -1,7 +1,8 @@
 package com.example.data.model
 
 import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FieldValue
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,6 +54,38 @@ data class Vehicle(
                 model.takeIf { it.isNotBlank() }
             ).joinToString(" ").ifBlank { "Untitled Vehicle" }
         }
+
+    fun toApiJson(nowIso: String = VehicleDraft.currentIsoTimestamp()): JSONObject {
+        val cleanGallery = galleryImages
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.length <= VehicleDraft.MAX_IMAGE_FIELD_LENGTH }
+            .take(10)
+
+        return JSONObject().apply {
+            put("id", id.trim())
+            put("title", displayTitle.take(200))
+            put("make", make.trim().take(80))
+            put("model", model.trim().take(120))
+            put("year", year.coerceIn(1950L, 2100L))
+            put("price", price.coerceIn(0L, 100_000_000L))
+            originalPrice?.takeIf { it in 0L..100_000_000L }?.let {
+                put("originalPrice", it)
+            } ?: put("originalPrice", JSONObject.NULL)
+            put("mileage", mileage.trim().take(60))
+            put("transmission", transmission.trim().take(80))
+            put("fuelType", fuelType.trim().take(80))
+            put("color", color.trim().take(80))
+            put("origin", origin.trim().take(100))
+            put("imageUrl", imageUrl.trim().take(VehicleDraft.MAX_IMAGE_FIELD_LENGTH))
+            put("galleryImages", JSONArray(cleanGallery))
+            put("description", description.trim().take(4000))
+            put("tiktokUrl", tiktokUrl.trim().take(500))
+            put("status", statusEnum.value)
+            put("featured", featured)
+            put("createdAt", createdAt.trim().ifBlank { nowIso }.take(64))
+            put("updatedAt", nowIso)
+        }
+    }
 }
 
 data class VehicleDraft(
@@ -116,6 +149,42 @@ data class VehicleDraft(
             }
         }.take(4000)
 
+    fun toApiJson(
+        vehicleId: String,
+        createdAtIso: String = currentIsoTimestamp(),
+        updatedAtIso: String = currentIsoTimestamp()
+    ): JSONObject {
+        val cleanGallery = galleryImages
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.length <= MAX_IMAGE_FIELD_LENGTH }
+            .take(10)
+
+        return JSONObject().apply {
+            put("id", vehicleId)
+            put("title", resolvedTitle)
+            put("make", resolvedMake)
+            put("model", resolvedModel)
+            put("year", year.coerceIn(1950L, 2100L))
+            put("price", price.coerceIn(0L, 100_000_000L))
+            originalPrice?.takeIf { it in 0L..100_000_000L }?.let {
+                put("originalPrice", it)
+            } ?: put("originalPrice", JSONObject.NULL)
+            put("mileage", mileage.trim().take(60))
+            put("transmission", transmission.trim().take(80))
+            put("fuelType", fuelType.trim().take(80))
+            put("color", color.trim().take(80))
+            put("origin", origin.trim().take(100))
+            put("imageUrl", imageUrl.trim().take(MAX_IMAGE_FIELD_LENGTH))
+            put("galleryImages", JSONArray(cleanGallery))
+            put("description", resolvedDescription)
+            put("tiktokUrl", tiktokUrl.trim().take(500))
+            put("status", status.value)
+            put("featured", featured)
+            put("createdAt", createdAtIso.take(64))
+            put("updatedAt", updatedAtIso.take(64))
+        }
+    }
+
     fun toCreateMap(vehicleId: String, createdAtIso: String = currentIsoTimestamp()): Map<String, Any> {
         val raw = mutableMapOf<String, Any>(
             "id" to vehicleId,
@@ -129,49 +198,30 @@ data class VehicleDraft(
             "fuelType" to fuelType.trim().take(80),
             "color" to color.trim().take(80),
             "origin" to origin.trim().take(100),
-            "imageUrl" to imageUrl.trim().take(550_000),
+            "imageUrl" to imageUrl.trim().take(MAX_IMAGE_FIELD_LENGTH),
             "description" to resolvedDescription,
             "tiktokUrl" to tiktokUrl.trim().take(500),
             "status" to status.value,
             "featured" to featured,
             "createdAt" to createdAtIso.take(64),
-            "updatedAt" to FieldValue.serverTimestamp()
+            "updatedAt" to currentIsoTimestamp()
         )
         originalPrice?.takeIf { it in 0L..100_000_000L }?.let {
             raw["originalPrice"] = it
         }
-        val cleanGallery = galleryImages.map { it.trim() }.filter { it.isNotEmpty() && it.length <= 550_000 }.take(10)
+        val cleanGallery = galleryImages
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.length <= MAX_IMAGE_FIELD_LENGTH }
+            .take(10)
         if (cleanGallery.isNotEmpty()) {
             raw["galleryImages"] = cleanGallery
         }
         return raw
     }
 
-    fun toUpdateMap(): Map<String, Any> {
-        val cleanGallery = galleryImages.map { it.trim() }.filter { it.isNotEmpty() && it.length <= 550_000 }.take(10)
-        return mapOf(
-            "title" to resolvedTitle,
-            "make" to resolvedMake,
-            "model" to resolvedModel,
-            "year" to year.coerceIn(1950L, 2100L),
-            "price" to price.coerceIn(0L, 100_000_000L),
-            "originalPrice" to (originalPrice?.takeIf { it in 0L..100_000_000L } ?: FieldValue.delete()),
-            "mileage" to mileage.trim().take(60),
-            "transmission" to transmission.trim().take(80),
-            "fuelType" to fuelType.trim().take(80),
-            "color" to color.trim().take(80),
-            "origin" to origin.trim().take(100),
-            "imageUrl" to imageUrl.trim().take(550_000),
-            "galleryImages" to (cleanGallery.takeIf { it.isNotEmpty() } ?: FieldValue.delete()),
-            "description" to resolvedDescription,
-            "tiktokUrl" to tiktokUrl.trim().take(500),
-            "status" to status.value,
-            "featured" to featured,
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
-    }
-
     companion object {
+        const val MAX_IMAGE_FIELD_LENGTH = 2_000_000
+
         fun currentIsoTimestamp(): String {
             val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
                 timeZone = TimeZone.getTimeZone("UTC")

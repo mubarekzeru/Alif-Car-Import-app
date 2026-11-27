@@ -8,7 +8,6 @@ import com.example.data.model.Vehicle
 import com.example.data.model.VehicleDraft
 import com.example.data.model.VehicleStatus
 import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,18 +94,20 @@ class InventoryViewModel(
             metrics = metrics
         ) as InventoryUiState
     }.catch { error ->
-        val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        val rootError = firestoreError ?: error
-        Log.w(TAG, "Error observing vehicles", rootError)
-        emit(InventoryUiState.Error(rootError.localizedMessage ?: "Failed to sync vehicle inventory"))
+        if (error is CancellationException) throw error
+        Log.w(TAG, "Error observing vehicles", error)
+        emit(InventoryUiState.Error(error.localizedMessage ?: "Failed to sync vehicle inventory"))
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
         initialValue = InventoryUiState.Loading
     )
+
+    fun refreshVehicles() {
+        viewModelScope.launch {
+            repository.refreshVehicles()
+        }
+    }
 
     fun selectStatusFilter(filter: StatusFilter) {
         _filterState.update { it.copy(selectedStatus = filter) }

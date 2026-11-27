@@ -8,7 +8,6 @@ import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
 import com.example.ui.components.formatOptionalCurrency
 import com.example.ui.components.resolvedPhotoSlots
-import com.google.firebase.firestore.FieldValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -69,41 +68,6 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun vehicleDraftToUpdateMap_includesOptionalFieldsOrDeleteSentinels() {
-        val draft = VehicleDraft(
-            title = "2024 Lexus RX 350 F Sport",
-            make = "Lexus",
-            model = "RX 350",
-            year = 2024L,
-            price = 68500L,
-            originalPrice = 72000L,
-            mileage = "8,200 km",
-            transmission = "Automatic",
-            fuelType = "Petrol",
-            color = "Obsidian",
-            origin = "UAE",
-            imageUrl = "data:image/jpeg;base64,/9j/4AAQ",
-            galleryImages = listOf("https://example.com/rx1.jpg"),
-            description = "Clean import with full service history.",
-            tiktokUrl = "https://www.tiktok.com/@alifcarimport/video/123",
-            status = VehicleStatus.AVAILABLE,
-            featured = false
-        )
-
-        val map = draft.toUpdateMap()
-        assertFalse(map.containsKey("id"))
-        assertFalse(map.containsKey("createdAt"))
-        assertEquals(72000L, map["originalPrice"])
-        assertEquals(listOf("https://example.com/rx1.jpg"), map["galleryImages"])
-        assertTrue(map["updatedAt"] is FieldValue)
-
-        val clearedDraft = draft.copy(originalPrice = null, galleryImages = emptyList())
-        val clearedMap = clearedDraft.toUpdateMap()
-        assertTrue(clearedMap["originalPrice"] is FieldValue)
-        assertTrue(clearedMap["galleryImages"] is FieldValue)
-    }
-
-    @Test
     fun formatters_formatCurrencyAndMileageCleanly() {
         assertEquals("ETB 89,500", formatCurrency(89500L))
         assertEquals("ETB 1.25M", formatCompactCurrency(1_250_000L))
@@ -115,29 +79,7 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun portalModels_matchWebsiteFirestoreRulesSchema() {
-        val showroom = com.example.data.model.ShowroomConfig(
-            branding = com.example.data.model.BrandingConfig(companyName = " ", logoUrl = "", tagline = "Tag"),
-            contact = com.example.data.model.ContactConfig(phone = "+251911000000", telegram = "@alifcar")
-        ).toFirestoreMap()
-        val branding = showroom["branding"] as Map<*, *>
-        val contact = showroom["contact"] as Map<*, *>
-        assertEquals("Alif Car Import", branding["companyName"])
-        assertEquals("@alifcar", contact["telegram"])
-        assertFalse(contact.containsKey("instagram"))
-        assertTrue(showroom["updatedAt"] is FieldValue)
-
-        val ttCreate = com.example.data.model.TikTokPostDraft(
-            title = "LC300 Arrival",
-            caption = "Fresh arrival",
-            tiktokUrl = "https://www.tiktok.com/@alif/video/1",
-            coverImageUrl = "",
-            sortOrder = 2L
-        ).toCreateMap("tt_lc300_123456")
-        assertEquals("tt_lc300_123456", ttCreate["id"])
-        assertEquals(2L, ttCreate["sortOrder"])
-        assertTrue(ttCreate["updatedAt"] is FieldValue)
-
+    fun adminAccessConfig_normalizesEmailsSafely() {
         val normalized = com.example.data.model.AdminAccessConfig.normalizeEmails(
             listOf(" User@Example.com ", "user@example.com", "", "Admin@Site.com")
         )
@@ -522,40 +464,36 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun showroomConfigToFirestoreMap_includesAllSocialPlatformsAndOmitsBlankOptionals() {
-        val map = com.example.data.model.ShowroomConfig(
-            contact = com.example.data.model.ContactConfig(
-                phone = "+251911000000",
-                youtube = "https://youtube.com/@alifcarimport",
-                snapchat = "@alifcarimport",
-                linkedin = "https://linkedin.com/company/alifcarimport",
-                threads = "@alifcarimport",
-                pinterest = "https://pinterest.com/alifcarimport",
-                reddit = "https://reddit.com/u/alifcarimport",
-                viber = "+251911000000",
-                imo = "+251911000000",
-                wechat = "alifcarimport_cn",
-                discord = "https://discord.gg/alifcarimport",
-                twitch = "https://twitch.tv/alifcarimport",
-                website = "https://alifcarimport.com",
-                instagram = ""
-            )
-        ).toFirestoreMap()
-
-        val contact = map["contact"] as Map<*, *>
-        assertEquals("https://youtube.com/@alifcarimport", contact["youtube"])
-        assertEquals("@alifcarimport", contact["snapchat"])
-        assertEquals("https://linkedin.com/company/alifcarimport", contact["linkedin"])
-        assertEquals("@alifcarimport", contact["threads"])
-        assertEquals("https://pinterest.com/alifcarimport", contact["pinterest"])
-        assertEquals("https://reddit.com/u/alifcarimport", contact["reddit"])
-        assertEquals("+251911000000", contact["viber"])
-        assertEquals("+251911000000", contact["imo"])
-        assertEquals("alifcarimport_cn", contact["wechat"])
-        assertEquals("https://discord.gg/alifcarimport", contact["discord"])
-        assertEquals("https://twitch.tv/alifcarimport", contact["twitch"])
-        assertEquals("https://alifcarimport.com", contact["website"])
-        assertFalse(contact.containsKey("instagram"))
+    fun contactConfig_preservesAllSocialPlatforms() {
+        val contact = com.example.data.model.ContactConfig(
+            phone = "+251911000000",
+            youtube = "https://youtube.com/@alifcarimport",
+            snapchat = "@alifcarimport",
+            linkedin = "https://linkedin.com/company/alifcarimport",
+            threads = "@alifcarimport",
+            pinterest = "https://pinterest.com/alifcarimport",
+            reddit = "https://reddit.com/u/alifcarimport",
+            viber = "+251911000000",
+            imo = "+251911000000",
+            wechat = "alifcarimport_cn",
+            discord = "https://discord.gg/alifcarimport",
+            twitch = "https://twitch.tv/alifcarimport",
+            website = "https://alifcarimport.com",
+            instagram = ""
+        )
+        assertEquals("https://youtube.com/@alifcarimport", contact.youtube)
+        assertEquals("@alifcarimport", contact.snapchat)
+        assertEquals("https://linkedin.com/company/alifcarimport", contact.linkedin)
+        assertEquals("@alifcarimport", contact.threads)
+        assertEquals("https://pinterest.com/alifcarimport", contact.pinterest)
+        assertEquals("https://reddit.com/u/alifcarimport", contact.reddit)
+        assertEquals("+251911000000", contact.viber)
+        assertEquals("+251911000000", contact.imo)
+        assertEquals("alifcarimport_cn", contact.wechat)
+        assertEquals("https://discord.gg/alifcarimport", contact.discord)
+        assertEquals("https://twitch.tv/alifcarimport", contact.twitch)
+        assertEquals("https://alifcarimport.com", contact.website)
+        assertEquals("", contact.instagram)
     }
 
     @Test

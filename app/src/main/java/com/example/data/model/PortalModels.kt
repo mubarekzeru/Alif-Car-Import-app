@@ -1,7 +1,7 @@
 package com.example.data.model
 
 import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FieldValue
+import org.json.JSONObject
 import java.util.Locale
 
 data class BrandingConfig(
@@ -69,26 +69,26 @@ data class ShowroomConfig(
     val contact: ContactConfig = ContactConfig(),
     val updatedAt: Timestamp? = null
 ) {
-    fun toFirestoreMap(): Map<String, Any> {
-        val cleanBranding = mapOf(
-            "companyName" to branding.companyName.trim().ifEmpty { "Alif Car Import" }.take(120),
-            "logoUrl" to branding.logoUrl.trim().take(550_000),
-            "tagline" to branding.tagline.trim().take(240)
-        )
-        val cleanHero = mapOf(
-            "kicker" to hero.kicker.trim().take(120),
-            "title" to hero.title.trim().ifEmpty { "Quality Vehicles Imported Direct" }.take(200),
-            "description" to hero.description.trim().take(1200),
-            "imageUrl" to hero.imageUrl.trim().take(550_000),
-            "ctaLabel" to hero.ctaLabel.trim().ifEmpty { "Browse Inventory" }.take(80)
-        )
-        val cleanTikTok = mapOf(
-            "title" to tiktok.title.trim().ifEmpty { "TikTok Walkarounds" }.take(160),
-            "description" to tiktok.description.trim().take(1200),
-            "profileUrl" to tiktok.profileUrl.trim().take(500),
-            "handle" to tiktok.handle.trim().take(80)
-        )
-        val cleanContact = buildMap<String, Any> {
+    fun toApiJson(): JSONObject {
+        val cleanBranding = JSONObject().apply {
+            put("companyName", branding.companyName.trim().ifEmpty { "Alif Car Import" }.take(120))
+            put("logoUrl", branding.logoUrl.trim().take(VehicleDraft.MAX_IMAGE_FIELD_LENGTH))
+            put("tagline", branding.tagline.trim().take(240))
+        }
+        val cleanHero = JSONObject().apply {
+            put("kicker", hero.kicker.trim().take(120))
+            put("title", hero.title.trim().ifEmpty { "Quality Vehicles Imported Direct" }.take(200))
+            put("description", hero.description.trim().take(1200))
+            put("imageUrl", hero.imageUrl.trim().take(VehicleDraft.MAX_IMAGE_FIELD_LENGTH))
+            put("ctaLabel", hero.ctaLabel.trim().ifEmpty { "Browse Inventory" }.take(80))
+        }
+        val cleanTikTokHeader = JSONObject().apply {
+            put("title", tiktok.title.trim().ifEmpty { "TikTok Walkarounds" }.take(160))
+            put("description", tiktok.description.trim().take(1200))
+            put("profileUrl", tiktok.profileUrl.trim().take(500))
+            put("handle", tiktok.handle.trim().take(80))
+        }
+        val cleanContact = JSONObject().apply {
             put("addressLine", contact.addressLine.trim().take(240))
             put("cityCountry", contact.cityCountry.trim().take(160))
             put("hours", contact.hours.trim().take(160))
@@ -97,30 +97,30 @@ data class ShowroomConfig(
             put("email", contact.email.trim().take(254))
             put("mapsUrl", contact.mapsUrl.trim().take(500))
             put("landmarkNote", contact.landmarkNote.trim().take(240))
-            contact.telegram.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("telegram", it) }
-            contact.instagram.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("instagram", it) }
-            contact.facebook.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("facebook", it) }
-            contact.x.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("x", it) }
-            contact.youtube.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("youtube", it) }
-            contact.snapchat.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("snapchat", it) }
-            contact.linkedin.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("linkedin", it) }
-            contact.pinterest.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("pinterest", it) }
-            contact.threads.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("threads", it) }
-            contact.reddit.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("reddit", it) }
-            contact.viber.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("viber", it) }
-            contact.imo.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("imo", it) }
-            contact.wechat.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("wechat", it) }
-            contact.discord.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("discord", it) }
-            contact.twitch.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("twitch", it) }
-            contact.website.trim().take(500).takeIf { it.isNotEmpty() }?.let { put("website", it) }
+            put("telegram", contact.telegram.trim().take(300))
+            put("instagram", contact.instagram.trim().take(300))
+            put("facebook", contact.facebook.trim().take(300))
+            put("x", contact.x.trim().take(300))
+            put("youtube", contact.youtube.trim().take(300))
+            put("snapchat", contact.snapchat.trim().take(300))
+            put("linkedin", contact.linkedin.trim().take(300))
+            put("pinterest", contact.pinterest.trim().take(300))
+            put("threads", contact.threads.trim().take(300))
+            put("reddit", contact.reddit.trim().take(300))
+            put("viber", contact.viber.trim().take(300))
+            put("imo", contact.imo.trim().take(300))
+            put("wechat", contact.wechat.trim().take(300))
+            put("discord", contact.discord.trim().take(300))
+            put("twitch", contact.twitch.trim().take(300))
+            put("website", contact.website.trim().take(500))
         }
-        return mapOf(
-            "branding" to cleanBranding,
-            "hero" to cleanHero,
-            "tiktok" to cleanTikTok,
-            "contact" to cleanContact,
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
+        return JSONObject().apply {
+            put("branding", cleanBranding)
+            put("hero", cleanHero)
+            put("tiktokHeader", cleanTikTokHeader)
+            put("contact", cleanContact)
+            put("updatedAt", VehicleDraft.currentIsoTimestamp())
+        }
     }
 }
 
@@ -141,24 +141,15 @@ data class TikTokPostDraft(
     val coverImageUrl: String,
     val sortOrder: Long
 ) {
-    fun toCreateMap(postId: String): Map<String, Any> = mapOf(
-        "id" to postId,
-        "title" to title.trim().take(200),
-        "caption" to caption.trim().take(2000),
-        "tiktokUrl" to tiktokUrl.trim().take(500),
-        "coverImageUrl" to coverImageUrl.trim().take(550_000),
-        "sortOrder" to sortOrder.coerceIn(0L, 1000L),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
-
-    fun toUpdateMap(): Map<String, Any> = mapOf(
-        "title" to title.trim().take(200),
-        "caption" to caption.trim().take(2000),
-        "tiktokUrl" to tiktokUrl.trim().take(500),
-        "coverImageUrl" to coverImageUrl.trim().take(550_000),
-        "sortOrder" to sortOrder.coerceIn(0L, 1000L),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
+    fun toApiJson(postId: String): JSONObject = JSONObject().apply {
+        put("id", postId)
+        put("title", title.trim().take(200))
+        put("caption", caption.trim().take(2000))
+        put("tiktokUrl", tiktokUrl.trim().take(500))
+        put("coverImageUrl", coverImageUrl.trim().take(VehicleDraft.MAX_IMAGE_FIELD_LENGTH))
+        put("sortOrder", sortOrder.coerceIn(0L, 1000L))
+        put("updatedAt", VehicleDraft.currentIsoTimestamp())
+    }
 }
 
 data class CustomerInquiry(
@@ -231,10 +222,5 @@ data class AdminAccessConfig(
                 grantedEmail = normalizedTarget
             )
         }
-
-        fun toFirestoreMap(emails: List<String>): Map<String, Any> = mapOf(
-            "adminEmails" to normalizeEmails(emails),
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
     }
 }

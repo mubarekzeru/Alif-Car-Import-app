@@ -106,11 +106,11 @@ import com.example.ui.theme.LotPulseTheme
 import com.example.ui.viewmodel.InventoryUiState
 import com.example.ui.viewmodel.InventoryViewModel
 import com.example.ui.viewmodel.PortalViewModel
+import com.example.data.network.CloudflareApiClient
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -229,9 +229,7 @@ fun LotPulseApp(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
-    val db = remember(context) {
-        FirebaseFirestore.getInstance(context.getString(R.string.firestore_database_id))
-    }
+    val apiClient = remember { CloudflareApiClient.getShared(auth) }
 
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var authRefreshTick by remember { mutableIntStateOf(0) }
@@ -263,7 +261,7 @@ fun LotPulseApp(
             return@produceState
         }
         value = AdminAuthorizationState.Checking
-        observeAdminAuthorization(context, db, active).collect { state ->
+        observeAdminAuthorization(context, apiClient, active).collect { state ->
             value = state
         }
     }
@@ -478,13 +476,8 @@ private fun AuthenticatedLotAdmin(
         key = currentUserId,
         factory = viewModelFactory {
             initializer {
-                val app = checkNotNull(this[APPLICATION_KEY]) {
-                    "APPLICATION_KEY missing from CreationExtras"
-                }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
                 InventoryViewModel(
-                    repository = VehicleRepository(db)
+                    repository = VehicleRepository(CloudflareApiClient.getShared())
                 )
             }
         }
@@ -497,12 +490,13 @@ private fun AuthenticatedLotAdmin(
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
                 PortalViewModel(
                     appContext = app.applicationContext,
-                    repository = PortalRepository(db),
-                    securityRepository = SecuritySessionRepository(app.applicationContext, db)
+                    repository = PortalRepository(
+                        context = app.applicationContext,
+                        apiClient = CloudflareApiClient.getShared()
+                    ),
+                    securityRepository = SecuritySessionRepository(app.applicationContext)
                 )
             }
         }
@@ -539,7 +533,7 @@ private fun AuthenticatedLotAdmin(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 portalViewModel.refreshSessionHeartbeat()
-                AdminAlertMonitorService.startIfEnabled(context)
+                portalViewModel.refreshPortalDataOnResume()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

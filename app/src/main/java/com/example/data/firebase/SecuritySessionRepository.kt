@@ -13,6 +13,7 @@ import com.example.data.model.LoginSecurityAlert
 import com.example.data.model.PendingAuthenticatorSetup
 import com.example.data.model.SecurityLockHelper
 import com.example.data.security.TotpAuthenticator
+import com.example.ui.notifications.SecurityNotificationHelper
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.EmailAuthProvider
@@ -509,6 +510,98 @@ class SecuritySessionRepository(
         _readAlertIds.value = updated
         prefs.edit().putStringSet(KEY_READ_ALERT_IDS, updated).apply()
         return allIds
+    }
+
+    suspend fun deletePreviousAlertsExceptCurrent(): Result<Int> {
+        val currentUser = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before deleting notifications."))
+        val mySessionId = currentSessionId(currentUser.uid)
+
+        return try {
+            val alertsSnapshot = withTimeoutOrNull(6000L) {
+                runCatching { db.collection(COL_LOGIN_ALERTS).get(Source.SERVER).await() }
+                    .getOrElse { db.collection(COL_LOGIN_ALERTS).get().await() }
+            }
+            val attemptsSnapshot = withTimeoutOrNull(6000L) {
+                runCatching { db.collection(COL_ADMIN_LOGIN_ATTEMPTS).get(Source.SERVER).await() }
+                    .getOrElse { db.collection(COL_ADMIN_LOGIN_ATTEMPTS).get().await() }
+            }
+
+            val remoteParsedAlerts = alertsSnapshot?.documents
+                ?.mapNotNull { doc ->
+                    val alert = parseRemoteAlert(doc)
+                    if (alert != null && alert.isAdminPageEvent) doc.reference to alert else null
+                }
+                .orEmpty()
+
+            val localCurrentId = LoginSecurityAlert.findCurrentStatusAlertId(_alerts.value, mySessionId)
+            val remoteCurrentId = LoginSecurityAlert.findCurrentStatusAlertId(
+                remoteParsedAlerts.map { it.second },
+                mySessionId
+            )
+            val keepAlertId = remoteCurrentId ?: localCurrentId
+
+            val remoteAttemptRefs = attemptsSnapshot?.documents
+                ?.filter { doc ->
+                    val alert = parseRemoteAttemptAsAlert(doc)
+                    alert != null && alert.isAdminPageEvent
+                }
+                ?.map { doc -> doc.reference to "attempt_${doc.id}" }
+                .orEmpty()
+
+            val refsToDelete = buildList {
+                remoteParsedAlerts.forEach { (ref, alert) ->
+                    if (alert.id != keepAlertId) add(ref)
+                }
+                remoteAttemptRefs.forEach { (ref, _) ->
+                    add(ref)
+                }
+            }
+
+            var deletedCloudCount = 0
+            refsToDelete.chunked(50).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { ref -> batch.delete(ref) }
+                withTimeoutOrNull(6000L) {
+                    batch.commit().await()
+                }
+                deletedCloudCount += chunk.size
+            }
+
+            val deletedLocalIds = _alerts.value
+                .filter { it.id != keepAlertId }
+                .map { it.id }
+                .toSet()
+            val allDeletedIds = deletedLocalIds +
+                remoteParsedAlerts.mapNotNull { (_, alert) -> alert.id.takeIf { it != keepAlertId } } +
+                remoteAttemptRefs.map { it.second }
+
+            _alerts.value = _alerts.value.filter { it.id == keepAlertId }
+            val updatedReadIds = if (keepAlertId != null && _readAlertIds.value.contains(keepAlertId)) {
+                setOf(keepAlertId)
+            } else {
+                emptySet()
+            }
+            _readAlertIds.value = updatedReadIds
+            prefs.edit().putStringSet(KEY_READ_ALERT_IDS, updatedReadIds).apply()
+            seenAttemptIds.clear()
+            saveLocalPrefs()
+
+            if (allDeletedIds.isNotEmpty()) {
+                SecurityNotificationHelper.clearLoginAlertNotifications(appContext, allDeletedIds)
+            }
+
+            Result.success(maxOf(deletedCloudCount, deletedLocalIds.size))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, COL_LOGIN_ALERTS)
+            Result.failure(
+                IllegalStateException(
+                    e.localizedMessage ?: "Unable to delete previous notifications right now."
+                )
+            )
+        }
     }
 
     fun deactivateOtherSession(

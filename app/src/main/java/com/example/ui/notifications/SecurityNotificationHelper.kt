@@ -23,7 +23,6 @@ object SecurityNotificationHelper {
 
     const val EXTRA_OPEN_NOTIFICATIONS_TAB = "extra_open_notifications_tab"
     const val EXTRA_GRANT_CANDIDATE_EMAIL = "extra_grant_candidate_email"
-    const val EXTRA_OPEN_REMOVE_OTHER_DEVICES = "extra_open_remove_other_devices"
     const val TAB_LOGIN_ALERTS = "login_alerts"
     const val TAB_INQUIRIES = "inquiries"
 
@@ -206,19 +205,6 @@ object SecurityNotificationHelper {
             )
             builder.addAction(0, "Grant Admin Access", grantPendingIntent)
         }
-
-        val removeOtherDevicesIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(EXTRA_OPEN_NOTIFICATIONS_TAB, TAB_LOGIN_ALERTS)
-            putExtra(EXTRA_OPEN_REMOVE_OTHER_DEVICES, true)
-        }
-        val removeOtherDevicesPendingIntent = PendingIntent.getActivity(
-            context,
-            ("remove_others_${alert.id}").hashCode(),
-            removeOtherDevicesIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(0, "Remove Other Devices", removeOtherDevicesPendingIntent)
 
         val notification = builder.build()
 

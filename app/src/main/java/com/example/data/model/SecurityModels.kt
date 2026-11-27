@@ -189,6 +189,18 @@ data class LoginSecurityAlert(
     companion object {
         const val ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED = "authenticator_verified"
 
+        fun findCurrentStatusAlertId(
+            alerts: List<LoginSecurityAlert>,
+            currentSessionId: String
+        ): String? {
+            val cleanSessionId = currentSessionId.trim()
+            if (cleanSessionId.isEmpty()) return null
+            return alerts
+                .filter { !it.isUnauthorizedAttempt && it.sessionId.trim() == cleanSessionId }
+                .maxByOrNull { it.timestampMillis }
+                ?.id
+        }
+
         fun isAuthenticatorVerifiedAttemptType(attemptType: String?): Boolean {
             val clean = attemptType.orEmpty().trim().lowercase()
             if (clean.isEmpty()) return false

@@ -147,7 +147,6 @@ private enum class AppRootStage {
 class MainActivity : ComponentActivity() {
     private val pendingNotificationTab = MutableStateFlow<NotificationCenterTab?>(null)
     private val pendingGrantCandidateEmail = MutableStateFlow<String?>(null)
-    private val pendingRemoveOtherDevices = MutableStateFlow(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -167,15 +166,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             val requestedTab by pendingNotificationTab.collectAsStateWithLifecycle()
             val requestedGrantEmail by pendingGrantCandidateEmail.collectAsStateWithLifecycle()
-            val requestedRemoveOtherDevices by pendingRemoveOtherDevices.collectAsStateWithLifecycle()
             LotPulseTheme {
                 LotPulseApp(
                     requestedNotificationTab = requestedTab,
                     onConsumeNotificationTab = { pendingNotificationTab.value = null },
                     requestedGrantEmail = requestedGrantEmail,
-                    onConsumeGrantEmail = { pendingGrantCandidateEmail.value = null },
-                    requestedRemoveOtherDevices = requestedRemoveOtherDevices,
-                    onConsumeRemoveOtherDevices = { pendingRemoveOtherDevices.value = false }
+                    onConsumeGrantEmail = { pendingGrantCandidateEmail.value = null }
                 )
             }
         }
@@ -196,11 +192,6 @@ class MainActivity : ComponentActivity() {
             pendingGrantCandidateEmail.value = grantCandidate
             pendingNotificationTab.value = NotificationCenterTab.LOGIN_ALERTS
             intent.removeExtra(SecurityNotificationHelper.EXTRA_GRANT_CANDIDATE_EMAIL)
-        }
-        if (intent.getBooleanExtra(SecurityNotificationHelper.EXTRA_OPEN_REMOVE_OTHER_DEVICES, false)) {
-            pendingRemoveOtherDevices.value = true
-            pendingNotificationTab.value = NotificationCenterTab.LOGIN_ALERTS
-            intent.removeExtra(SecurityNotificationHelper.EXTRA_OPEN_REMOVE_OTHER_DEVICES)
         }
         val rawTab = intent.getStringExtra(SecurityNotificationHelper.EXTRA_OPEN_NOTIFICATIONS_TAB)
             ?: return
@@ -233,9 +224,7 @@ fun LotPulseApp(
     requestedNotificationTab: NotificationCenterTab? = null,
     onConsumeNotificationTab: () -> Unit = {},
     requestedGrantEmail: String? = null,
-    onConsumeGrantEmail: () -> Unit = {},
-    requestedRemoveOtherDevices: Boolean = false,
-    onConsumeRemoveOtherDevices: () -> Unit = {}
+    onConsumeGrantEmail: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -385,8 +374,6 @@ fun LotPulseApp(
                             onConsumeNotificationTab = onConsumeNotificationTab,
                             requestedGrantEmail = requestedGrantEmail,
                             onConsumeGrantEmail = onConsumeGrantEmail,
-                            requestedRemoveOtherDevices = requestedRemoveOtherDevices,
-                            onConsumeRemoveOtherDevices = onConsumeRemoveOtherDevices,
                             onWillSignOut = {
                                 skipAutoSignIn = true
                                 passedAuthenticatorAuthTime = null
@@ -479,8 +466,6 @@ private fun AuthenticatedLotAdmin(
     onConsumeNotificationTab: () -> Unit,
     requestedGrantEmail: String?,
     onConsumeGrantEmail: () -> Unit,
-    requestedRemoveOtherDevices: Boolean = false,
-    onConsumeRemoveOtherDevices: () -> Unit = {},
     onWillSignOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -592,6 +577,7 @@ private fun AuthenticatedLotAdmin(
     val securitySyncError by portalViewModel.securitySyncError.collectAsStateWithLifecycle()
     val isRefreshingSessions by portalViewModel.isRefreshingSessions.collectAsStateWithLifecycle()
     val isSigningOutAll by portalViewModel.isSigningOutAll.collectAsStateWithLifecycle()
+    val isDeletingPreviousAlerts by portalViewModel.isDeletingPreviousAlerts.collectAsStateWithLifecycle()
     val authenticatorStatus by portalViewModel.authenticatorStatus.collectAsStateWithLifecycle()
     val isMutatingAuthenticator by portalViewModel.isMutatingAuthenticator.collectAsStateWithLifecycle()
     val websiteVisitorStats by portalViewModel.websiteVisitorStats.collectAsStateWithLifecycle()
@@ -786,19 +772,17 @@ private fun AuthenticatedLotAdmin(
                 readAlertIds = readAlertIds,
                 inquiriesState = inquiriesState,
                 adminAccessState = adminAccessState,
-                authenticatorStatus = authenticatorStatus,
                 isMutatingAdminAccess = isPortalMutating,
-                isSigningOutAll = isSigningOutAll,
+                isDeletingPreviousAlerts = isDeletingPreviousAlerts,
                 currentSessionId = portalViewModel.currentSessionId,
                 currentSessionVerifiedWithAuthenticator = verifiedWithAuthenticator,
                 preselectedGrantEmail = requestedGrantEmail,
                 onConsumePreselectedGrantEmail = onConsumeGrantEmail,
-                openRemoveOtherDevicesOnLaunch = requestedRemoveOtherDevices,
-                onConsumeOpenRemoveOtherDevices = onConsumeRemoveOtherDevices,
                 snackbarMessage = portalSnackbar,
                 onConsumeSnackbar = portalViewModel::consumeSnackbar,
                 onSelectTab = portalViewModel::selectNotificationTab,
                 onMarkAllRead = portalViewModel::markAllLoginAlertsRead,
+                onDeletePreviousAlerts = portalViewModel::deletePreviousLoginAlertsExceptCurrent,
                 onConfirmItWasMe = portalViewModel::confirmLoginAlertIsMe,
                 onRejectNotMe = portalViewModel::rejectLoginAlertNotMe,
                 onGrantAdminAccess = { email ->
@@ -809,12 +793,6 @@ private fun AuthenticatedLotAdmin(
                 },
                 onRemoveFromLoggedIn = { email, sessionId ->
                     portalViewModel.removeUserFromLoggedIn(email, sessionId)
-                },
-                onRemoveAllOtherDevices = { totpCode, onResult ->
-                    scope.launch {
-                        val result = portalViewModel.removeAllOtherActiveDevices(totpCode)
-                        onResult(result)
-                    }
                 },
                 onBack = { navController.popBackStack() }
             )

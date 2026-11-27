@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DoneAll
@@ -87,7 +88,6 @@ import com.example.data.firebase.AdminAccessState
 import com.example.data.firebase.InquiriesState
 import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.AdminAccessConfig
-import com.example.data.model.AuthenticatorStatus
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
 import com.example.ui.notifications.SecurityNotificationHelper
@@ -112,25 +112,22 @@ fun NotificationsScreen(
     readAlertIds: Set<String> = emptySet(),
     inquiriesState: InquiriesState,
     adminAccessState: AdminAccessState = AdminAccessState.Loading,
-    authenticatorStatus: AuthenticatorStatus = AuthenticatorStatus(),
     isMutatingAdminAccess: Boolean = false,
-    isSigningOutAll: Boolean = false,
+    isDeletingPreviousAlerts: Boolean = false,
     currentSessionId: String = "",
     currentSessionVerifiedWithAuthenticator: Boolean = false,
     preselectedGrantEmail: String? = null,
     onConsumePreselectedGrantEmail: () -> Unit = {},
-    openRemoveOtherDevicesOnLaunch: Boolean = false,
-    onConsumeOpenRemoveOtherDevices: () -> Unit = {},
     snackbarMessage: String?,
     onConsumeSnackbar: () -> Unit,
     onSelectTab: (NotificationCenterTab) -> Unit,
     onMarkAllRead: () -> Unit = {},
+    onDeletePreviousAlerts: () -> Unit = {},
     onConfirmItWasMe: (String) -> Unit,
     onRejectNotMe: (String) -> Unit,
     onGrantAdminAccess: (String) -> Unit = {},
     onRevokeAdminAccess: (String) -> Unit = {},
     onRemoveFromLoggedIn: (email: String, sessionId: String) -> Unit = { _, _ -> },
-    onRemoveAllOtherDevices: (totpCode: String, onResult: (Result<Int>) -> Unit) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -153,22 +150,17 @@ fun NotificationsScreen(
     val unreadCount = remember(alerts, readAlertIds) {
         alerts.count { it.isUnread(readAlertIds) }
     }
-    val otherActiveSessions = remember(sessions) {
-        sessions.filterNot { it.isCurrentDevice }
+    val currentStatusAlertId = remember(alerts, currentSessionId) {
+        LoginSecurityAlert.findCurrentStatusAlertId(alerts, currentSessionId)
     }
-    val otherWebsiteSessionsCount = remember(otherActiveSessions) {
-        otherActiveSessions.count { it.isWebsiteSession }
-    }
-    val otherMobileSessionsCount = remember(otherActiveSessions) {
-        otherActiveSessions.count { !it.isWebsiteSession }
+    val deletablePreviousCount = remember(alerts, currentStatusAlertId) {
+        alerts.count { it.id != currentStatusAlertId }
     }
 
     var grantDialogEmail by remember { mutableStateOf<String?>(null) }
     var revokeDialogEmail by remember { mutableStateOf<String?>(null) }
     var removeSessionDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var showRemoveAllOtherDevicesDialog by remember { mutableStateOf(false) }
-    var removeAllTotpInput by remember { mutableStateOf("") }
-    var removeAllDialogError by remember { mutableStateOf<String?>(null) }
+    var showDeletePreviousDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(preselectedGrantEmail) {
         val candidate = preselectedGrantEmail?.trim()
@@ -177,13 +169,6 @@ fun NotificationsScreen(
                 grantDialogEmail = candidate
             }
             onConsumePreselectedGrantEmail()
-        }
-    }
-
-    LaunchedEffect(openRemoveOtherDevicesOnLaunch) {
-        if (openRemoveOtherDevicesOnLaunch) {
-            showRemoveAllOtherDevicesDialog = true
-            onConsumeOpenRemoveOtherDevices()
         }
     }
 
@@ -327,91 +312,60 @@ fun NotificationsScreen(
                     }
                 }
 
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                if (alerts.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = "Device Security",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (otherActiveSessions.isNotEmpty()) {
-                                        "${otherActiveSessions.size} other active session(s) ($otherWebsiteSessionsCount website • $otherMobileSessionsCount app)"
-                                    } else {
-                                        "Sign out all other website & app sessions while keeping this device logged in."
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (otherActiveSessions.isNotEmpty()) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.errorContainer,
-                                    shape = CircleShape
-                                ) {
-                                    Text(
-                                        text = "${otherActiveSessions.size} other",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        Button(
-                            onClick = { showRemoveAllOtherDevicesDialog = true },
-                            enabled = !isSigningOutAll,
+                        Text(
+                            text = if (deletablePreviousCount > 0) {
+                                "$deletablePreviousCount earlier alert(s) • Keeping current login"
+                            } else {
+                                "Current logged-in status only"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { showDeletePreviousDialog = true },
+                            enabled = deletablePreviousCount > 0 && !isDeletingPreviousAlerts,
                             shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError
+                            border = BorderStroke(
+                                1.dp,
+                                if (deletablePreviousCount > 0) {
+                                    MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                }
+                            ),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
                             ),
                             modifier = Modifier
-                                .fillMaxWidth()
                                 .height(48.dp)
-                                .testTag("notifications_remove_all_other_devices_button")
+                                .testTag("delete_previous_alerts_button")
                         ) {
-                            if (isSigningOutAll) {
+                            if (isDeletingPreviousAlerts) {
                                 CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = MaterialTheme.colorScheme.onError,
+                                    modifier = Modifier.size(16.dp),
+                                    color = MaterialTheme.colorScheme.error,
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Removing Other Devices…", fontWeight = FontWeight.Bold)
+                                Text("Deleting…", fontWeight = FontWeight.SemiBold)
                             } else {
                                 Icon(
-                                    imageVector = Icons.Default.Devices,
+                                    imageVector = Icons.Default.DeleteSweep,
                                     contentDescription = null,
                                     modifier = Modifier.size(18.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Remove All Other Devices (App & Website)",
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Delete Old Alerts", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
@@ -662,82 +616,45 @@ fun NotificationsScreen(
         )
     }
 
-    if (showRemoveAllOtherDevicesDialog) {
+    if (showDeletePreviousDialog) {
         AlertDialog(
             onDismissRequest = {
-                if (!isSigningOutAll) {
-                    showRemoveAllOtherDevicesDialog = false
-                    removeAllTotpInput = ""
-                    removeAllDialogError = null
+                if (!isDeletingPreviousAlerts) {
+                    showDeletePreviousDialog = false
                 }
             },
             containerColor = MaterialTheme.colorScheme.surface,
             icon = {
                 Icon(
-                    imageVector = Icons.Default.Devices,
+                    imageVector = Icons.Default.DeleteSweep,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error
                 )
             },
             title = {
                 Text(
-                    text = "Remove All Other Devices?",
+                    text = "Delete Previous Notifications?",
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "This immediately signs out all other logged-in devices across both the Website and Mobile Apps while keeping this current device signed in.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (authenticatorStatus.enabled) {
-                        TotpCodeInputField(
-                            value = removeAllTotpInput,
-                            onValueChange = {
-                                removeAllTotpInput = it
-                                removeAllDialogError = null
-                            },
-                            label = "Google Authenticator 6-Digit Code",
-                            enabled = !isSigningOutAll,
-                            isError = removeAllDialogError != null,
-                            testTag = "notifications_remove_all_totp_input"
-                        )
-                    }
-                    removeAllDialogError?.let { errMsg ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = MaterialTheme.shapes.small
-                        ) {
-                            Text(
-                                text = errMsg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp)
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = if (currentStatusAlertId != null) {
+                        "This permanently deletes all $deletablePreviousCount earlier login notification(s) across website and apps, keeping only your current logged-in status."
+                    } else {
+                        "This permanently deletes all $deletablePreviousCount earlier login notification(s) across website and apps while keeping your current session signed in."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        removeAllDialogError = null
-                        onRemoveAllOtherDevices(removeAllTotpInput) { result ->
-                            result.onSuccess {
-                                showRemoveAllOtherDevicesDialog = false
-                                removeAllTotpInput = ""
-                                removeAllDialogError = null
-                            }.onFailure { err ->
-                                removeAllDialogError = err.localizedMessage
-                                    ?: "Valid 6-digit Google Authenticator code is required."
-                            }
-                        }
+                        showDeletePreviousDialog = false
+                        onDeletePreviousAlerts()
                     },
-                    enabled = !isSigningOutAll,
+                    enabled = !isDeletingPreviousAlerts,
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
@@ -745,23 +662,21 @@ fun NotificationsScreen(
                     ),
                     modifier = Modifier
                         .height(48.dp)
-                        .testTag("confirm_notifications_remove_all_other_devices_button")
+                        .testTag("confirm_delete_previous_alerts_button")
                 ) {
                     Text(
-                        text = if (isSigningOutAll) "Removing…" else "Remove All Others",
+                        text = if (isDeletingPreviousAlerts) "Deleting…" else "Delete Old Alerts",
                         fontWeight = FontWeight.Bold
                     )
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = {
-                        showRemoveAllOtherDevicesDialog = false
-                        removeAllTotpInput = ""
-                        removeAllDialogError = null
-                    },
-                    enabled = !isSigningOutAll,
-                    modifier = Modifier.height(48.dp)
+                    onClick = { showDeletePreviousDialog = false },
+                    enabled = !isDeletingPreviousAlerts,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("cancel_delete_previous_alerts_button")
                 ) {
                     Text("Cancel")
                 }

@@ -573,7 +573,7 @@ test("loginAlerts: admins receive and verify cross-device login alerts with stri
     })
   );
 
-  // Rejects creating pre-confirmed alert, spoofing uid, mutating email, or deleting alert
+  // Rejects creating pre-confirmed alert, spoofing uid, or non-admin deleting alert; verified admin can delete old alert
   await assertFails(
     ownerDb
       .collection("loginAlerts")
@@ -586,7 +586,8 @@ test("loginAlerts: admins receive and verify cross-device login alerts with stri
       .doc("alert_bad_uid")
       .set(validLoginAlertPayload("alert_bad_uid", "sess_1", "mgr_uid"))
   );
-  await assertFails(ownerDb.collection("loginAlerts").doc("alert_web_001").delete());
+  await assertFails(nonAdminDb.collection("loginAlerts").doc("alert_web_001").delete());
+  await assertSucceeds(ownerDb.collection("loginAlerts").doc("alert_web_001").delete());
 });
 
 test("config/security forceSignOutBefore immediately blocks pre-update/stale admin tokens across all collections", async () => {
@@ -972,11 +973,13 @@ test("adminLoginAttempts: allows logging admin-page attempts only, blocks visito
     })
   );
 
-  // Only verified admin can read attempts; nobody can update or delete
+  // Only verified admin can read or delete attempts; nobody can update
   await assertFails(unauthDb.collection("adminLoginAttempts").get());
   await assertFails(nonAdminDb.collection("adminLoginAttempts").get());
   await assertSucceeds(ownerDb.collection("adminLoginAttempts").get());
-  await assertFails(ownerDb.collection("adminLoginAttempts").doc("att_admin_001").delete());
+  await assertFails(unauthDb.collection("adminLoginAttempts").doc("att_admin_001").delete());
+  await assertFails(nonAdminDb.collection("adminLoginAttempts").doc("att_admin_001").delete());
+  await assertSucceeds(ownerDb.collection("adminLoginAttempts").doc("att_admin_001").delete());
 });
 
 test("pageVisits & siteStats/visitors: public can record visits (+1 only), only admin can read totals", async () => {

@@ -448,17 +448,23 @@ class PortalRepository(
 
     private fun extractVisitTimestampMillis(doc: DocumentSnapshot): Long {
         val data = doc.data ?: return 0L
-        val fromTs = listOf("createdAt", "timestamp", "visitedAt", "updatedAt")
-            .firstNotNullOfOrNull { field ->
-                runCatching {
-                    doc.getTimestamp(field, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
-                }.getOrNull()
-            }
+        val timeFields = listOf("createdAt", "timestamp", "visitedAt", "updatedAt")
+        val fromTs = timeFields.firstNotNullOfOrNull { field ->
+            runCatching {
+                doc.getTimestamp(field, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            }.getOrNull()
+        }
         if (fromTs != null && fromTs > 0L) return fromTs
         val fromMillis = (data["timestampMillis"] as? Number)?.toLong()
             ?: (data["createdAtMillis"] as? Number)?.toLong()
             ?: (data["visitedAtMillis"] as? Number)?.toLong()
+            ?: timeFields.firstNotNullOfOrNull { field -> (data[field] as? Number)?.toLong() }
         if (fromMillis != null && fromMillis > 0L) return fromMillis
+        val fromIso = timeFields.firstNotNullOfOrNull { field ->
+            val raw = (data[field] as? String)?.trim().orEmpty()
+            parseIsoTimestampMillis(raw)
+        }
+        if (fromIso != null && fromIso > 0L) return fromIso
         val dateKey = (data["dateKey"] as? String).orEmpty().trim()
         if (dateKey.length == 10) {
             runCatching {
@@ -466,6 +472,26 @@ class PortalRepository(
             }.getOrNull()?.let { if (it > 0L) return it }
         }
         return 0L
+    }
+
+    private fun parseIsoTimestampMillis(raw: String): Long? {
+        if (raw.length < 10) return null
+        val normalized = raw.replace("Z", "+0000")
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            "yyyy-MM-dd'T'HH:mm:ssZ",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd"
+        )
+        for (pattern in patterns) {
+            val parsed = runCatching {
+                SimpleDateFormat(pattern, Locale.US).parse(normalized)?.time
+            }.getOrNull()
+            if (parsed != null && parsed > 0L) return parsed
+        }
+        return null
     }
 
     private fun computeVisitorStats(
@@ -515,8 +541,10 @@ class PortalRepository(
             }
             val rawPage = (data["page"] as? String).orEmpty().trim()
                 .ifBlank { (data["path"] as? String).orEmpty().trim() }
+                .ifBlank { (data["pathname"] as? String).orEmpty().trim() }
                 .ifBlank { (data["sourcePage"] as? String).orEmpty().trim() }
                 .ifBlank { (data["url"] as? String).orEmpty().trim() }
+                .ifBlank { (data["href"] as? String).orEmpty().trim() }
                 .ifBlank { "/" }
             val normalizedPage = com.example.data.model.LoginSecurityAlert.normalizePagePath(rawPage).ifBlank { "/" }
             parsedRecords.add(

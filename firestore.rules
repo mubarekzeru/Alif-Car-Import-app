@@ -469,11 +469,17 @@ service cloud.firestore {
           'id',
           'page',
           'path',
+          'pathname',
           'url',
+          'href',
           'sourcePage',
+          'title',
+          'type',
+          'event',
           'visitorId',
           'sessionId',
           'deviceId',
+          'isUnique',
           'dateKey',
           'referrer',
           'userAgent',
@@ -481,24 +487,38 @@ service cloud.firestore {
           'deviceName',
           'platform',
           'location',
+          'country',
+          'city',
+          'language',
+          'screen',
           'timestampMillis',
           'timestamp',
           'visitedAt',
-          'createdAt'
+          'createdAt',
+          'updatedAt'
         ]) &&
         (!('id' in data) || data.id == visitId) &&
         (
           (('page' in data) && isValidString(data.page, 1, 200)) ||
           (('path' in data) && isValidString(data.path, 1, 200)) ||
-          (('url' in data) && isValidString(data.url, 1, 300))
+          (('pathname' in data) && isValidString(data.pathname, 1, 200)) ||
+          (('sourcePage' in data) && isValidString(data.sourcePage, 1, 200)) ||
+          (('url' in data) && isValidString(data.url, 1, 300)) ||
+          (('href' in data) && isValidString(data.href, 1, 300))
         ) &&
         (!('page' in data) || data.page == null || isValidString(data.page, 0, 200)) &&
         (!('path' in data) || data.path == null || isValidString(data.path, 0, 200)) &&
+        (!('pathname' in data) || data.pathname == null || isValidString(data.pathname, 0, 200)) &&
         (!('url' in data) || data.url == null || isValidString(data.url, 0, 300)) &&
+        (!('href' in data) || data.href == null || isValidString(data.href, 0, 300)) &&
         (!('sourcePage' in data) || data.sourcePage == null || isValidString(data.sourcePage, 0, 200)) &&
+        (!('title' in data) || data.title == null || isValidString(data.title, 0, 200)) &&
+        (!('type' in data) || data.type == null || isValidString(data.type, 0, 60)) &&
+        (!('event' in data) || data.event == null || isValidString(data.event, 0, 60)) &&
         (!('visitorId' in data) || data.visitorId == null || isValidString(data.visitorId, 0, 128)) &&
         (!('sessionId' in data) || data.sessionId == null || isValidString(data.sessionId, 0, 128)) &&
         (!('deviceId' in data) || data.deviceId == null || isValidString(data.deviceId, 0, 128)) &&
+        (!('isUnique' in data) || data.isUnique == null || data.isUnique is bool) &&
         (!('dateKey' in data) || data.dateKey == null || isValidString(data.dateKey, 0, 20)) &&
         (!('referrer' in data) || data.referrer == null || isValidString(data.referrer, 0, 300)) &&
         (!('userAgent' in data) || data.userAgent == null || isValidString(data.userAgent, 0, 300)) &&
@@ -506,10 +526,15 @@ service cloud.firestore {
         (!('deviceName' in data) || data.deviceName == null || isValidString(data.deviceName, 0, 160)) &&
         (!('platform' in data) || data.platform == null || isValidString(data.platform, 0, 60)) &&
         (!('location' in data) || data.location == null || isValidString(data.location, 0, 160)) &&
+        (!('country' in data) || data.country == null || isValidString(data.country, 0, 100)) &&
+        (!('city' in data) || data.city == null || isValidString(data.city, 0, 100)) &&
+        (!('language' in data) || data.language == null || isValidString(data.language, 0, 40)) &&
+        (!('screen' in data) || data.screen == null || isValidString(data.screen, 0, 40)) &&
         (!('timestampMillis' in data) || (data.timestampMillis is number && data.timestampMillis >= 0)) &&
-        (!('createdAt' in data) || isValidTimestamp(data.createdAt)) &&
-        (!('timestamp' in data) || isValidTimestamp(data.timestamp)) &&
-        (!('visitedAt' in data) || isValidTimestamp(data.visitedAt)) &&
+        (!('createdAt' in data) || isValidTimestamp(data.createdAt) || isValidString(data.createdAt, 10, 40) || (data.createdAt is number && data.createdAt >= 0)) &&
+        (!('updatedAt' in data) || isValidTimestamp(data.updatedAt) || isValidString(data.updatedAt, 10, 40) || (data.updatedAt is number && data.updatedAt >= 0)) &&
+        (!('timestamp' in data) || isValidTimestamp(data.timestamp) || isValidString(data.timestamp, 10, 40) || (data.timestamp is number && data.timestamp >= 0)) &&
+        (!('visitedAt' in data) || isValidTimestamp(data.visitedAt) || isValidString(data.visitedAt, 10, 40) || (data.visitedAt is number && data.visitedAt >= 0)) &&
         (('createdAt' in data) || ('timestamp' in data) || ('visitedAt' in data) || ('timestampMillis' in data));
     }
 
@@ -727,14 +752,15 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['location', 'updatedAt'])
           )
         );
-      allow delete: if false;
+      allow delete: if isVerifiedUser() && isAdmin();
     }
 
     match /adminLoginAttempts/{attemptId} {
       allow get: if isVerifiedUser() && isValidId(attemptId) && isAdmin();
       allow list: if isVerifiedUser() && isAdmin();
       allow create: if isValidId(attemptId) && isValidAdminLoginAttempt(attemptId, incoming());
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isAdmin();
     }
 
     match /pageVisits/{visitId} {

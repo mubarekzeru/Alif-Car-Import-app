@@ -907,8 +907,43 @@ class ExampleUnitTest {
         assertFalse(incorrectAttempt.isUnread(markedRead))
         assertFalse(ownerAuthLogin.isUnread(markedRead))
     }
+
+    @Test
+    fun loginSecurityAlert_findCurrentStatusAlertId_keepsOnlyCurrentSessionLatestAlert() {
+        val currentSessionId = "uid1_dev1"
+        val olderSameDevice = com.example.data.model.LoginSecurityAlert(
+            id = "alert_old_phone",
+            sessionId = currentSessionId,
+            email = "alifcarimports@gmail.com",
+            deviceName = "Pixel",
+            platform = "Mobile App",
+            location = "Addis Ababa",
+            timestampMillis = 1_760_000_010_000L
+        )
+        val currentLogin = olderSameDevice.copy(
+            id = "alert_current_phone",
+            timestampMillis = 1_760_000_200_000L
+        )
+        val websiteLogin = olderSameDevice.copy(
+            id = "alert_web_other",
+            sessionId = "uid1_web9",
+            platform = "Website",
+            timestampMillis = 1_760_000_300_000L
+        )
+        val blockedAttemptSameSession = olderSameDevice.copy(
+            id = "attempt_blocked",
+            isUnauthorizedAttempt = true,
+            timestampMillis = 1_760_000_400_000L
+        )
+
+        val alerts = listOf(blockedAttemptSameSession, websiteLogin, currentLogin, olderSameDevice)
+        assertEquals(
+            "alert_current_phone",
+            com.example.data.model.LoginSecurityAlert.findCurrentStatusAlertId(alerts, currentSessionId)
+        )
+        assertEquals(
+            null,
+            com.example.data.model.LoginSecurityAlert.findCurrentStatusAlertId(alerts, "")
+        )
+    }
 }
-
-
-
-

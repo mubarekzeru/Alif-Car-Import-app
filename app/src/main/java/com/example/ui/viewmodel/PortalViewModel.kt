@@ -63,6 +63,9 @@ class PortalViewModel(
     private val _isSigningOutAll = MutableStateFlow(false)
     val isSigningOutAll: StateFlow<Boolean> = _isSigningOutAll.asStateFlow()
 
+    private val _isDeletingPreviousAlerts = MutableStateFlow(false)
+    val isDeletingPreviousAlerts: StateFlow<Boolean> = _isDeletingPreviousAlerts.asStateFlow()
+
     private val _isMutatingAuthenticator = MutableStateFlow(false)
     val isMutatingAuthenticator: StateFlow<Boolean> = _isMutatingAuthenticator.asStateFlow()
 
@@ -241,6 +244,24 @@ class PortalViewModel(
         if (markedIds.isNotEmpty()) {
             SecurityNotificationHelper.clearLoginAlertNotifications(appContext, markedIds)
             _snackbarMessage.value = "All login alerts marked as read"
+        }
+    }
+
+    fun deletePreviousLoginAlertsExceptCurrent() {
+        if (_isDeletingPreviousAlerts.value) return
+        viewModelScope.launch {
+            _isDeletingPreviousAlerts.value = true
+            val result = securityRepository.deletePreviousAlertsExceptCurrent()
+            _isDeletingPreviousAlerts.value = false
+            result.onSuccess { deletedCount ->
+                _snackbarMessage.value = if (deletedCount > 0) {
+                    "Deleted $deletedCount previous login notification(s); kept current login status"
+                } else {
+                    "Only your current login status notification remains"
+                }
+            }.onFailure { err ->
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to delete previous notifications"
+            }
         }
     }
 

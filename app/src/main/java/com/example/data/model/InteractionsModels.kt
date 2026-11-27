@@ -98,9 +98,10 @@ object InteractionsAnalyticsEngine {
         val windowMillis = range.durationDays.toLong() * DAY_MILLIS
         val periodStartMillis = nowMillis - windowMillis
         val previousStartMillis = periodStartMillis - windowMillis
+        val upperBoundMillis = nowMillis + (5L * 60L * 1000L)
 
         val periodRecords = allRecords
-            .filter { it.createdAtMillis in periodStartMillis..nowMillis }
+            .filter { it.createdAtMillis in periodStartMillis..upperBoundMillis }
             .sortedByDescending { it.createdAtMillis }
 
         val previousRecords = allRecords
@@ -108,7 +109,7 @@ object InteractionsAnalyticsEngine {
 
         val periodInquiriesCount = inquiries.count { inquiry ->
             val createdMs = inquiry.createdAt?.toDate()?.time ?: 0L
-            createdMs in periodStartMillis..nowMillis
+            createdMs in periodStartMillis..upperBoundMillis
         }.toLong()
 
         val allTimeTotal = maxOf(stats.totalVisits, allRecords.size.toLong())
@@ -245,9 +246,10 @@ object InteractionsAnalyticsEngine {
         val shortFmt = SimpleDateFormat("ha", Locale.US)
         val fullFmt = SimpleDateFormat("h:mm a", Locale.US)
 
+        val upperBound = nowMillis + (5L * 60L * 1000L)
         return (0 until slotCount).map { idx ->
             val bucketStart = start + idx * slotDuration
-            val bucketEnd = if (idx == slotCount - 1) nowMillis + 1L else bucketStart + slotDuration
+            val bucketEnd = if (idx == slotCount - 1) upperBound else bucketStart + slotDuration
             val inBucket = records.filter { it.createdAtMillis in bucketStart until bucketEnd }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
             val visits = if (idx == slotCount - 1 && inBucket.isEmpty() && fallbackCount > 0L) {
@@ -277,10 +279,11 @@ object InteractionsAnalyticsEngine {
         val fullFmt = SimpleDateFormat(fullPattern, Locale.US)
         val todayCal = startOfDayCalendar(nowMillis)
 
+        val upperBound = nowMillis + (5L * 60L * 1000L)
         return (days - 1 downTo 0).map { offset ->
             val calStart = (todayCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -offset) }
             val startMs = calStart.timeInMillis
-            val endMs = if (offset == 0) nowMillis + 1L else startMs + DAY_MILLIS
+            val endMs = if (offset == 0) upperBound else startMs + DAY_MILLIS
             val inBucket = records.filter { it.createdAtMillis in startMs until endMs }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
             TrafficChartBucket(

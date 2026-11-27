@@ -616,6 +616,7 @@ class SecuritySessionRepository(
         val email = user.email.orEmpty().trim().take(254)
         val payload = mapOf(
             "enabled" to true,
+            "requireOnLogin" to true,
             "secretBase32" to cleanSecret,
             "accountLabel" to email,
             "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
@@ -632,6 +633,7 @@ class SecuritySessionRepository(
             totpLockoutUntilMillis = 0L
             _authenticatorStatus.value = AuthenticatorStatus(
                 enabled = true,
+                requireOnLogin = true,
                 accountLabel = email,
                 updatedByEmail = email,
                 updatedAtMillis = System.currentTimeMillis(),
@@ -685,6 +687,7 @@ class SecuritySessionRepository(
         val email = user.email.orEmpty().trim().take(254)
         val payload = mapOf(
             "enabled" to false,
+            "requireOnLogin" to false,
             "secretBase32" to "",
             "accountLabel" to email,
             "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
@@ -701,6 +704,7 @@ class SecuritySessionRepository(
             totpLockoutUntilMillis = 0L
             _authenticatorStatus.value = AuthenticatorStatus(
                 enabled = false,
+                requireOnLogin = false,
                 accountLabel = email,
                 updatedByEmail = email,
                 updatedAtMillis = System.currentTimeMillis(),
@@ -714,6 +718,99 @@ class SecuritySessionRepository(
             Result.failure(
                 IllegalStateException(
                     e.localizedMessage ?: "Unable to disable Google Authenticator right now."
+                )
+            )
+        }
+    }
+
+    suspend fun setRequireAuthenticatorOnLogin(
+        requireOnLogin: Boolean,
+        verificationCode: String = ""
+    ): Result<String> {
+        val user = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before updating login authentication settings."))
+
+        if (!_authenticatorStatus.value.isLoaded || (_authenticatorStatus.value.enabled && activeTotpSecret.isBlank())) {
+            runCatching {
+                val snap = db.collection(COL_CONFIG)
+                    .document(DOC_AUTHENTICATOR)
+                    .get(Source.SERVER)
+                    .await()
+                applyAuthenticatorSnapshot(snap)
+            }
+        }
+
+        val currentStatus = _authenticatorStatus.value
+        val secret = activeTotpSecret.trim()
+        if (!currentStatus.enabled || !TotpAuthenticator.isValidSecretBase32(secret)) {
+            return Result.failure(
+                IllegalStateException("Enable Google Authenticator first before changing login code verification.")
+            )
+        }
+
+        if (currentStatus.requireOnLogin == requireOnLogin) {
+            return Result.success(
+                if (requireOnLogin) {
+                    "Authentication code for login is already enabled."
+                } else {
+                    "Authentication code for login is already disabled."
+                }
+            )
+        }
+
+        // Disabling login 2FA lowers security, so require a live 6-digit Authenticator code first.
+        if (!requireOnLogin) {
+            val totpCheck = verifyProtectedActionTotp(
+                verificationCode,
+                "disable authentication code for login"
+            )
+            if (totpCheck.isFailure) {
+                return Result.failure(
+                    totpCheck.exceptionOrNull()
+                        ?: IllegalArgumentException("Valid 6-digit Google Authenticator code is required.")
+                )
+            }
+        }
+
+        val email = user.email.orEmpty().trim().take(254)
+        val accountLabel = currentStatus.accountLabel.ifBlank { email }.take(254)
+        val payload = mapOf(
+            "enabled" to true,
+            "requireOnLogin" to requireOnLogin,
+            "secretBase32" to secret,
+            "accountLabel" to accountLabel,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        return try {
+            db.collection(COL_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+            _authenticatorStatus.value = currentStatus.copy(
+                requireOnLogin = requireOnLogin,
+                updatedByEmail = email,
+                updatedAtMillis = System.currentTimeMillis(),
+                isLoaded = true
+            )
+            if (requireOnLogin) {
+                val sessionAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
+                    ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
+                if (sessionAuthSeconds > 0L) {
+                    LoginTwoFactorStore.markSessionVerified(appContext, user.uid, sessionAuthSeconds)
+                }
+                Result.success("Authentication code for login enabled. Signing in with alifcarimports@gmail.com will require your 6-digit code.")
+            } else {
+                Result.success("Authentication code for login disabled. Sensitive settings still remain protected by Google Authenticator.")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "$COL_CONFIG/$DOC_AUTHENTICATOR")
+            Result.failure(
+                IllegalStateException(
+                    e.localizedMessage ?: "Unable to update login authentication setting right now."
                 )
             )
         }
@@ -774,6 +871,7 @@ class SecuritySessionRepository(
             activeTotpSecret = ""
             _authenticatorStatus.value = AuthenticatorStatus(
                 enabled = false,
+                requireOnLogin = false,
                 isLoaded = true
             )
             return
@@ -781,9 +879,15 @@ class SecuritySessionRepository(
         val enabled = snapshot.getBoolean("enabled") == true
         val secret = snapshot.getString("secretBase32").orEmpty().trim()
         val effectiveEnabled = enabled && TotpAuthenticator.isValidSecretBase32(secret)
+        val requireOnLogin = if (effectiveEnabled) {
+            snapshot.getBoolean("requireOnLogin") ?: true
+        } else {
+            false
+        }
         activeTotpSecret = if (effectiveEnabled) secret else ""
         _authenticatorStatus.value = AuthenticatorStatus(
             enabled = effectiveEnabled,
+            requireOnLogin = requireOnLogin,
             accountLabel = snapshot.getString("accountLabel").orEmpty().trim(),
             updatedByEmail = snapshot.getString("updatedByEmail").orEmpty().trim(),
             updatedAtMillis = snapshot.getTimestamp("updatedAt")?.toDate()?.time ?: 0L,

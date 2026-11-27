@@ -65,10 +65,11 @@ object LoginAuthenticatorPolicy {
         userEmail: String?,
         authenticatorEnabled: Boolean,
         secretBase32: String,
-        alreadyVerifiedForSession: Boolean
+        alreadyVerifiedForSession: Boolean,
+        requireOnLogin: Boolean = true
     ): Boolean {
         if (!AdminAuthorizationPolicy.isBootstrapOwnerEmail(userEmail)) return false
-        if (!authenticatorEnabled) return false
+        if (!authenticatorEnabled || !requireOnLogin) return false
         if (!TotpAuthenticator.isValidSecretBase32(secretBase32.trim())) return false
         return !alreadyVerifiedForSession
     }

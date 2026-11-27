@@ -770,7 +770,7 @@ private fun AuthenticatedLotAdmin(
                 adminAccessState = adminAccessState,
                 isMutatingAdminAccess = isPortalMutating,
                 currentSessionId = portalViewModel.currentSessionId,
-                currentSessionVerifiedWithAuthenticator = verifiedWithAuthenticator || authenticatorStatus.enabled,
+                currentSessionVerifiedWithAuthenticator = verifiedWithAuthenticator,
                 preselectedGrantEmail = requestedGrantEmail,
                 onConsumePreselectedGrantEmail = onConsumeGrantEmail,
                 snackbarMessage = portalSnackbar,
@@ -863,6 +863,7 @@ private fun AuthenticatedLotAdmin(
                 onCreatePendingAuthenticatorSetup = portalViewModel::createPendingAuthenticatorSetup,
                 onEnableAuthenticator = portalViewModel::enableAuthenticator,
                 onDisableAuthenticator = portalViewModel::disableAuthenticator,
+                onSetRequireAuthenticatorOnLogin = portalViewModel::setRequireAuthenticatorOnLogin,
                 onBack = { navController.popBackStack() }
             )
         }

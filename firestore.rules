@@ -210,6 +210,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'enabled',
+          'requireOnLogin',
           'secretBase32',
           'accountLabel',
           'issuer',
@@ -217,6 +218,7 @@ service cloud.firestore {
           'updatedAt'
         ]) &&
         data.enabled is bool &&
+        (!('requireOnLogin' in data) || data.requireOnLogin is bool) &&
         data.secretBase32 is string &&
         (
           (data.enabled == true &&
@@ -538,6 +540,7 @@ service cloud.firestore {
         (configId == 'authenticator' && isValidAuthenticatorConfig(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'enabled',
+            'requireOnLogin',
             'secretBase32',
             'accountLabel',
             'issuer',

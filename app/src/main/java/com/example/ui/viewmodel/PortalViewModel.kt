@@ -328,6 +328,30 @@ class PortalViewModel(
         }
     }
 
+    fun setRequireAuthenticatorOnLogin(
+        requireOnLogin: Boolean,
+        verificationCode: String = "",
+        onComplete: (Result<String>) -> Unit
+    ) {
+        if (_isMutatingAuthenticator.value) return
+        viewModelScope.launch {
+            _isMutatingAuthenticator.value = true
+            val result = securityRepository.setRequireAuthenticatorOnLogin(
+                requireOnLogin = requireOnLogin,
+                verificationCode = verificationCode
+            )
+            _isMutatingAuthenticator.value = false
+            result.onSuccess {
+                _snackbarMessage.value = if (requireOnLogin) {
+                    "Authentication code for login enabled"
+                } else {
+                    "Authentication code for login disabled"
+                }
+            }
+            onComplete(result)
+        }
+    }
+
     fun changePassword(
         oldPassword: String,
         newPassword: String,

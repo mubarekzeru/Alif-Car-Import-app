@@ -42,6 +42,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,6 +73,7 @@ fun AuthenticatorSecurityCard(
     onCreatePendingSetup: () -> Result<PendingAuthenticatorSetup>,
     onEnableAuthenticator: (secretBase32: String, code: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onDisableAuthenticator: (code: String, onComplete: (Result<String>) -> Unit) -> Unit,
+    onSetRequireAuthenticatorOnLogin: (requireOnLogin: Boolean, code: String, onComplete: (Result<String>) -> Unit) -> Unit = { _, _, _ -> },
     onShowQuickFeedback: (String) -> Unit,
     modifier: Modifier = Modifier,
     initiallyExpanded: Boolean = false
@@ -81,6 +84,8 @@ fun AuthenticatorSecurityCard(
     var enableCodeInput by remember { mutableStateOf("") }
     var showDisableForm by remember { mutableStateOf(false) }
     var disableCodeInput by remember { mutableStateOf("") }
+    var showDisableLoginCodeForm by remember { mutableStateOf(false) }
+    var disableLoginCodeInput by remember { mutableStateOf("") }
     var feedbackMessage by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     Card(
@@ -110,39 +115,18 @@ fun AuthenticatorSecurityCard(
                     tint = if (status.enabled) EmeraldAvailable else MaterialTheme.colorScheme.primary
                 )
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "Google Authenticator (2FA)",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Surface(
-                            color = if (status.enabled) {
-                                EmeraldContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            shape = CircleShape
-                        ) {
-                            Text(
-                                text = if (status.enabled) "ENABLED" else "OFF",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = if (status.enabled) {
-                                    EmeraldAvailable
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = "Google Authenticator (2FA)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
                     Text(
                         text = if (status.enabled) {
-                            "6-digit Authenticator code is required to sign in with alifcarimports@gmail.com, remove active devices, change password, or disable 2FA"
+                            if (status.requireOnLogin) {
+                                "6-digit Authenticator code is required to sign in with alifcarimports@gmail.com, remove active devices, change password, or disable 2FA"
+                            } else {
+                                "Active for removing devices, changing password, and disabling 2FA (login authentication code is currently disabled)"
+                            }
                         } else {
                             "Connect Google Authenticator to require a 6-digit code when signing in with alifcarimports@gmail.com and for sensitive security actions"
                         },
@@ -194,6 +178,48 @@ fun AuthenticatorSecurityCard(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(10.dp)
                                 )
+                            }
+
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                shape = MaterialTheme.shapes.medium,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = "Authentication Code for Login",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Enable Google Authenticator below first to turn login authentication codes on or off.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = false,
+                                        enabled = false,
+                                        onCheckedChange = {},
+                                        modifier = Modifier.testTag("toggle_login_authenticator_code_switch_disabled")
+                                    )
+                                }
                             }
 
                             Button(
@@ -450,7 +476,11 @@ fun AuthenticatorSecurityCard(
                             shape = MaterialTheme.shapes.medium
                         ) {
                             Text(
-                                text = "Protected (${status.accountLabel.ifBlank { "Admin" }}): Signing in with alifcarimports@gmail.com, removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code.",
+                                text = if (status.requireOnLogin) {
+                                    "Protected (${status.accountLabel.ifBlank { "Admin" }}): Signing in with alifcarimports@gmail.com, removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code."
+                                } else {
+                                    "Protected (${status.accountLabel.ifBlank { "Admin" }}): Removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA require your 6-digit Google Authenticator code. Login authentication code is currently turned off."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = EmeraldAvailable,
                                 modifier = Modifier
@@ -459,10 +489,177 @@ fun AuthenticatorSecurityCard(
                             )
                         }
 
+                        // Dedicated Enable / Disable option for Authentication Code on Login
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            shape = MaterialTheme.shapes.medium,
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = if (status.requireOnLogin) {
+                                    EmeraldAvailable.copy(alpha = 0.45f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant
+                                }
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = null,
+                                        tint = if (status.requireOnLogin) {
+                                            EmeraldAvailable
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = "Authentication Code for Login",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = if (status.requireOnLogin) {
+                                                "Require a 6-digit Authenticator code when logging in with alifcarimports@gmail.com."
+                                            } else {
+                                                "Login with alifcarimports@gmail.com will not ask for a 6-digit code until enabled."
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = status.requireOnLogin && !showDisableLoginCodeForm,
+                                        enabled = !isMutating,
+                                        onCheckedChange = { shouldEnable ->
+                                            feedbackMessage = null
+                                            if (shouldEnable) {
+                                                showDisableLoginCodeForm = false
+                                                disableLoginCodeInput = ""
+                                                if (!status.requireOnLogin) {
+                                                    onSetRequireAuthenticatorOnLogin(true, "") { result ->
+                                                        result.onSuccess { okMsg ->
+                                                            feedbackMessage = true to okMsg
+                                                        }.onFailure { err ->
+                                                            feedbackMessage = false to (
+                                                                err.localizedMessage
+                                                                    ?: "Unable to enable login authentication code"
+                                                                )
+                                                        }
+                                                    }
+                                                }
+                                            } else if (status.requireOnLogin) {
+                                                showDisableForm = false
+                                                disableCodeInput = ""
+                                                disableLoginCodeInput = ""
+                                                showDisableLoginCodeForm = true
+                                            }
+                                        },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                            checkedTrackColor = EmeraldAvailable
+                                        ),
+                                        modifier = Modifier.testTag("toggle_login_authenticator_code_switch")
+                                    )
+                                }
+
+                                AnimatedVisibility(
+                                    visible = showDisableLoginCodeForm && status.requireOnLogin,
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Enter or paste your current 6-digit Google Authenticator code to disable login authentication code:",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        TotpCodeInputField(
+                                            value = disableLoginCodeInput,
+                                            onValueChange = { disableLoginCodeInput = it },
+                                            label = "Authenticator Code to Disable Login 2FA",
+                                            enabled = !isMutating,
+                                            testTag = "disable_login_authenticator_code_input"
+                                        )
+                                        Button(
+                                            onClick = {
+                                                feedbackMessage = null
+                                                onSetRequireAuthenticatorOnLogin(false, disableLoginCodeInput) { result ->
+                                                    result.onSuccess { okMsg ->
+                                                        feedbackMessage = true to okMsg
+                                                        disableLoginCodeInput = ""
+                                                        showDisableLoginCodeForm = false
+                                                    }.onFailure { err ->
+                                                        feedbackMessage = false to (
+                                                            err.localizedMessage
+                                                                ?: "Incorrect Authenticator code"
+                                                            )
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isMutating &&
+                                                TotpAuthenticator.sanitizeCodeInput(disableLoginCodeInput).length == TotpAuthenticator.DEFAULT_DIGITS,
+                                            shape = CircleShape,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.error,
+                                                contentColor = MaterialTheme.colorScheme.onError
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(48.dp)
+                                                .testTag("confirm_disable_login_authenticator_code_button")
+                                        ) {
+                                            if (isMutating) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    color = MaterialTheme.colorScheme.onError,
+                                                    strokeWidth = 2.dp
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("Verifying…")
+                                            } else {
+                                                Text("Verify Code & Disable Login Code", fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                showDisableLoginCodeForm = false
+                                                disableLoginCodeInput = ""
+                                                feedbackMessage = null
+                                            },
+                                            enabled = !isMutating,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("Cancel")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if (!showDisableForm) {
                             OutlinedButton(
                                 onClick = {
                                     feedbackMessage = null
+                                    showDisableLoginCodeForm = false
+                                    disableLoginCodeInput = ""
                                     disableCodeInput = ""
                                     showDisableForm = true
                                 },

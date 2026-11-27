@@ -710,6 +710,26 @@ class ExampleUnitTest {
                 alreadyVerifiedForSession = false
             )
         )
+        // Authenticator enabled, but login code option disabled -> no login challenge
+        assertFalse(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "alifcarimports@gmail.com",
+                authenticatorEnabled = true,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = false,
+                requireOnLogin = false
+            )
+        )
+        // Authenticator enabled and login code option enabled -> requires login challenge
+        assertTrue(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "alifcarimports@gmail.com",
+                authenticatorEnabled = true,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = false,
+                requireOnLogin = true
+            )
+        )
         // Different admin email -> does not trigger owner-only 2FA challenge
         assertFalse(
             com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(

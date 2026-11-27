@@ -295,6 +295,7 @@ fun AuthenticatorSettingsScreen(
     onCreatePendingAuthenticatorSetup: () -> Result<PendingAuthenticatorSetup>,
     onEnableAuthenticator: (secretBase32: String, code: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onDisableAuthenticator: (code: String, onComplete: (Result<String>) -> Unit) -> Unit,
+    onSetRequireAuthenticatorOnLogin: (requireOnLogin: Boolean, code: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -358,6 +359,7 @@ fun AuthenticatorSettingsScreen(
                     onCreatePendingSetup = onCreatePendingAuthenticatorSetup,
                     onEnableAuthenticator = onEnableAuthenticator,
                     onDisableAuthenticator = onDisableAuthenticator,
+                    onSetRequireAuthenticatorOnLogin = onSetRequireAuthenticatorOnLogin,
                     onShowQuickFeedback = { msg ->
                         scope.launch { snackbarHostState.showSnackbar(msg) }
                     },

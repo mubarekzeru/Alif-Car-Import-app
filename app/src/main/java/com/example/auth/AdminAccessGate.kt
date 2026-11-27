@@ -197,14 +197,16 @@ fun observeAdminAuthorization(
         }
 
         val authEnabled = authSnap?.exists() == true && authSnap.getBoolean("enabled") == true
+        val requireOnLogin = authSnap?.getBoolean("requireOnLogin") ?: true
         val secretBase32 = authSnap?.getString("secretBase32").orEmpty().trim()
-        val hasValidAuthenticator = authEnabled && TotpAuthenticator.isValidSecretBase32(secretBase32)
+        val hasLoginAuthenticator = authEnabled && requireOnLogin && TotpAuthenticator.isValidSecretBase32(secretBase32)
 
         if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = rawEmail,
                 authenticatorEnabled = authEnabled,
                 secretBase32 = secretBase32,
-                alreadyVerifiedForSession = alreadyVerified
+                alreadyVerifiedForSession = alreadyVerified,
+                requireOnLogin = requireOnLogin
             )
         ) {
             emit(
@@ -217,7 +219,7 @@ fun observeAdminAuthorization(
             return@flow
         }
 
-        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = hasValidAuthenticator))
+        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = hasLoginAuthenticator))
         return@flow
     }
 

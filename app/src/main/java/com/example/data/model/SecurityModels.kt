@@ -251,6 +251,7 @@ data class PasswordChangeOutcome(
 
 data class AuthenticatorStatus(
     val enabled: Boolean = false,
+    val requireOnLogin: Boolean = false,
     val accountLabel: String = "",
     val updatedByEmail: String = "",
     val updatedAtMillis: Long = 0L,

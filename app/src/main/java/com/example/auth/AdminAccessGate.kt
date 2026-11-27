@@ -48,7 +48,9 @@ import com.example.R
 import com.example.data.firebase.OperationType
 import com.example.data.firebase.handleFirestoreError
 import com.example.data.model.AdminAccessConfig
+import android.os.Build
 import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
@@ -61,6 +63,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.Locale
+import java.util.TimeZone
+import java.util.UUID
 
 sealed interface AdminAuthorizationState {
     data object Checking : AdminAuthorizationState
@@ -203,6 +207,7 @@ fun observeAdminAuthorization(
     }
 
     if (!initialApproved) {
+        reportUnauthorizedAdminLoginAttempt(db, rawEmail)
         emit(AdminAuthorizationState.Denied(rawEmail))
         return@flow
     }
@@ -253,6 +258,45 @@ private fun unwrapFirestoreException(error: Throwable): FirebaseFirestoreExcepti
     generateSequence(error) { it.cause }
         .filterIsInstance<FirebaseFirestoreException>()
         .firstOrNull()
+
+private suspend fun reportUnauthorizedAdminLoginAttempt(
+    db: FirebaseFirestore,
+    email: String
+) {
+    runCatching {
+        val attemptId = "att_app_${UUID.randomUUID().toString().replace("-", "").take(16)}"
+        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+        val model = Build.MODEL.orEmpty().trim()
+        val combined = if (model.startsWith(manufacturer, ignoreCase = true)) {
+            model
+        } else {
+            "$manufacturer $model".trim()
+        }
+        val deviceName = "${combined.ifBlank { "Android Device" }} (Android ${Build.VERSION.RELEASE})".take(160)
+        val country = Locale.getDefault().displayCountry.takeIf { it.isNotBlank() }
+        val tzCity = TimeZone.getDefault().id.substringAfter('/', "").replace('_', ' ')
+        val location = listOfNotNull(
+            tzCity.takeIf { it.isNotBlank() },
+            country
+        ).joinToString(", ").ifBlank { TimeZone.getDefault().id }.take(160)
+
+        val payload = mapOf(
+            "id" to attemptId,
+            "email" to email.trim().take(254),
+            "deviceName" to deviceName,
+            "platform" to "Mobile App Admin",
+            "sourcePage" to "/admin/app-login",
+            "location" to location,
+            "status" to "denied",
+            "browser" to "Mobile App",
+            "reason" to "Unauthorized account attempted to sign into Admin App",
+            "timestampMillis" to System.currentTimeMillis(),
+            "createdAt" to FieldValue.serverTimestamp()
+        )
+        db.collection("adminLoginAttempts").document(attemptId).set(payload).await()
+    }
+}
 
 @Composable
 fun AdminVerificationLoadingScreen(

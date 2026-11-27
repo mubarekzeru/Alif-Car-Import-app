@@ -16,6 +16,7 @@ import com.example.data.model.PendingAuthenticatorSetup
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
+import com.example.data.model.WebsiteVisitorStats
 import com.example.ui.components.BottomNavTab
 import com.example.ui.components.NotificationCenterTab
 import com.example.ui.notifications.SecurityNotificationHelper
@@ -27,8 +28,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -86,6 +85,11 @@ class PortalViewModel(
     private val _isMutatingAuthenticator = MutableStateFlow(false)
     val isMutatingAuthenticator: StateFlow<Boolean> = _isMutatingAuthenticator.asStateFlow()
 
+    private val _isRefreshingVisitorStats = MutableStateFlow(false)
+    val isRefreshingVisitorStats: StateFlow<Boolean> = _isRefreshingVisitorStats.asStateFlow()
+
+    private val _manualVisitorStats = MutableStateFlow<WebsiteVisitorStats?>(null)
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
@@ -131,11 +135,6 @@ class PortalViewModel(
         )
 
     val inquiriesState: StateFlow<InquiriesState> = repository.observeInquiries()
-        .onEach { state ->
-            if (state is InquiriesState.Success) {
-                SecurityNotificationHelper.showNewInquiriesIfNeeded(appContext, state.inquiries)
-            }
-        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
@@ -149,8 +148,38 @@ class PortalViewModel(
             initialValue = AdminAccessState.Loading
         )
 
-    init {
-        inquiriesState.launchIn(viewModelScope)
+    val websiteVisitorStats: StateFlow<WebsiteVisitorStats> = kotlinx.coroutines.flow.combine(
+        repository.observeWebsiteVisitorStats(),
+        _manualVisitorStats
+    ) { live, manual ->
+        if (manual != null && manual.totalVisits > live.totalVisits) {
+            manual
+        } else {
+            live
+        }
+    }.catch { error ->
+        val firestoreError = generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+        if (firestoreError == null && error is CancellationException) throw error
+        Log.w(TAG, "Error observing website visitor stats", firestoreError ?: error)
+        emit(WebsiteVisitorStats(isLoaded = true))
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+        initialValue = WebsiteVisitorStats()
+    )
+
+    fun refreshWebsiteVisitorStats() {
+        if (_isRefreshingVisitorStats.value) return
+        viewModelScope.launch {
+            _isRefreshingVisitorStats.value = true
+            repository.refreshWebsiteVisitorStats()
+                .onSuccess { stats ->
+                    _manualVisitorStats.value = stats
+                }
+            _isRefreshingVisitorStats.value = false
+        }
     }
 
     fun registerAuthenticatedSession(user: FirebaseUser) {

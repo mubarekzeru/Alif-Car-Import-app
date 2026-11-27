@@ -82,12 +82,17 @@ import com.example.data.firebase.PortalRepository
 import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.firebase.VehicleRepository
 import com.example.ui.components.AccountSettingsScreen
+import com.example.ui.components.ActiveDevicesScreen
 import com.example.ui.components.AddEditTikTokScreen
 import com.example.ui.components.AddEditVehicleScreen
 import com.example.ui.components.AdminAccessScreen
 import com.example.ui.components.AppImageLoader
+import com.example.ui.components.AuthenticatorSettingsScreen
 import com.example.ui.components.BottomNavTab
+import com.example.ui.components.ChangePasswordScreen
 import com.example.ui.components.ContactSocialLocationScreen
+import com.example.ui.components.InstantAlertsSettingsScreen
+import com.example.ui.components.InteractionsScreen
 import com.example.ui.components.NotificationCenterTab
 import com.example.ui.components.NotificationsScreen
 import com.example.ui.components.QuickPriceEditScreen
@@ -118,8 +123,13 @@ const val ROUTE_QUICK_PRICE = "quick_price/{vehicleId}"
 const val ROUTE_TIKTOK_FORM = "tiktok_form?postId={postId}"
 const val ROUTE_NOTIFICATIONS = "notifications"
 const val ROUTE_SETTINGS = "settings"
+const val ROUTE_ACTIVE_DEVICES = "active_devices"
+const val ROUTE_INSTANT_ALERTS = "instant_alerts"
+const val ROUTE_AUTHENTICATOR = "authenticator"
+const val ROUTE_CHANGE_PASSWORD = "change_password"
 const val ROUTE_CONTACT_SOCIAL_LOCATION = "contact_social_location"
 const val ROUTE_ADMIN_ACCESS = "admin_access"
+const val ROUTE_INTERACTIONS = "interactions"
 
 private val LuxuryEaseOut = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
@@ -494,6 +504,8 @@ private fun AuthenticatedLotAdmin(
     val isSigningOutAll by portalViewModel.isSigningOutAll.collectAsStateWithLifecycle()
     val authenticatorStatus by portalViewModel.authenticatorStatus.collectAsStateWithLifecycle()
     val isMutatingAuthenticator by portalViewModel.isMutatingAuthenticator.collectAsStateWithLifecycle()
+    val websiteVisitorStats by portalViewModel.websiteVisitorStats.collectAsStateWithLifecycle()
+    val isRefreshingVisitorStats by portalViewModel.isRefreshingVisitorStats.collectAsStateWithLifecycle()
 
     NavHost(
         navController = navController,
@@ -692,18 +704,28 @@ private fun AuthenticatedLotAdmin(
 
         composable(ROUTE_SETTINGS) {
             AccountSettingsScreen(
-                sessions = sessions,
-                loginAtMillis = currentLoginAtMillis,
-                isMutatingPassword = isChangingPassword,
                 snackbarMessage = portalSnackbar,
                 onConsumeSnackbar = portalViewModel::consumeSnackbar,
-                onDeactivateDevice = portalViewModel::deactivateOtherDevice,
-                onChangePassword = portalViewModel::changePassword,
-                onOpenContactSocialLocation = {
-                    navController.navigate(ROUTE_CONTACT_SOCIAL_LOCATION) { launchSingleTop = true }
+                onOpenActiveDevices = {
+                    navController.navigate(ROUTE_ACTIVE_DEVICES) { launchSingleTop = true }
+                },
+                onOpenInstantAlerts = {
+                    navController.navigate(ROUTE_INSTANT_ALERTS) { launchSingleTop = true }
+                },
+                onOpenAuthenticator = {
+                    navController.navigate(ROUTE_AUTHENTICATOR) { launchSingleTop = true }
+                },
+                onOpenChangePassword = {
+                    navController.navigate(ROUTE_CHANGE_PASSWORD) { launchSingleTop = true }
+                },
+                onOpenInteractions = {
+                    navController.navigate(ROUTE_INTERACTIONS) { launchSingleTop = true }
                 },
                 onOpenAdminAccess = {
                     navController.navigate(ROUTE_ADMIN_ACCESS) { launchSingleTop = true }
+                },
+                onOpenContactSocialLocation = {
+                    navController.navigate(ROUTE_CONTACT_SOCIAL_LOCATION) { launchSingleTop = true }
                 },
                 onSignOutClick = {
                     onWillSignOut()
@@ -713,6 +735,18 @@ private fun AuthenticatedLotAdmin(
                         signOut(credentialManager = credentialManager, scope = scope)
                     }
                 },
+                onBack = { navController.popBackStack() },
+                isSigningOutAll = isSigningOutAll
+            )
+        }
+
+        composable(ROUTE_ACTIVE_DEVICES) {
+            ActiveDevicesScreen(
+                sessions = sessions,
+                loginAtMillis = currentLoginAtMillis,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onDeactivateDevice = portalViewModel::deactivateOtherDevice,
                 onBack = { navController.popBackStack() },
                 securitySyncError = securitySyncError,
                 isRefreshingSessions = isRefreshingSessions,
@@ -724,11 +758,48 @@ private fun AuthenticatedLotAdmin(
                         onResult(result)
                     }
                 },
+                authenticatorStatus = authenticatorStatus
+            )
+        }
+
+        composable(ROUTE_INSTANT_ALERTS) {
+            InstantAlertsSettingsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(ROUTE_AUTHENTICATOR) {
+            AuthenticatorSettingsScreen(
                 authenticatorStatus = authenticatorStatus,
                 isMutatingAuthenticator = isMutatingAuthenticator,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
                 onCreatePendingAuthenticatorSetup = portalViewModel::createPendingAuthenticatorSetup,
                 onEnableAuthenticator = portalViewModel::enableAuthenticator,
-                onDisableAuthenticator = portalViewModel::disableAuthenticator
+                onDisableAuthenticator = portalViewModel::disableAuthenticator,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(ROUTE_CHANGE_PASSWORD) {
+            ChangePasswordScreen(
+                loginAtMillis = currentLoginAtMillis,
+                isMutatingPassword = isChangingPassword,
+                authenticatorStatus = authenticatorStatus,
+                snackbarMessage = portalSnackbar,
+                onConsumeSnackbar = portalViewModel::consumeSnackbar,
+                onChangePassword = portalViewModel::changePassword,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(ROUTE_INTERACTIONS) {
+            InteractionsScreen(
+                websiteVisitorStats = websiteVisitorStats,
+                inquiriesState = inquiriesState,
+                isRefreshing = isRefreshingVisitorStats,
+                onRefresh = portalViewModel::refreshWebsiteVisitorStats,
+                onBack = { navController.popBackStack() }
             )
         }
 

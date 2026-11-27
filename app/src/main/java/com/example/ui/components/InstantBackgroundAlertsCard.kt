@@ -87,9 +87,9 @@ fun InstantBackgroundAlertsCard(
                     )
                     Text(
                         text = if (enabled) {
-                            "Active — Pops up immediately for new inquiries & admin sign-ins even when app is closed"
+                            "Active — Pops up immediately only when someone tries to log into the Admin Page (not home or visitor pages), even when app is closed"
                         } else {
-                            "Off — Notifications appear only when you open the app"
+                            "Off — Admin Page login alerts appear only when you open the app"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

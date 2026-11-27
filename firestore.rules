@@ -73,34 +73,39 @@ service cloud.firestore {
       return val is timestamp && val <= request.time;
     }
 
+    function optStr(m, k, maxLen) {
+      let v = m.get(k, '');
+      return v == null || (v is string && v.size() <= maxLen);
+    }
+
     function isValidBranding(b) {
       return b is map &&
         b.keys().hasAll(['companyName', 'logoUrl', 'tagline']) &&
         b.keys().hasOnly(['companyName', 'logoUrl', 'tagline']) &&
-        isValidString(b.companyName, 1, 120) &&
-        isValidString(b.logoUrl, 0, 550000) &&
-        isValidString(b.tagline, 0, 240);
+        b.companyName is string && b.companyName.size() >= 1 && b.companyName.size() <= 120 &&
+        b.logoUrl is string && b.logoUrl.size() <= 550000 &&
+        b.tagline is string && b.tagline.size() <= 240;
     }
 
     function isValidHero(h) {
       return h is map &&
         h.keys().hasAll(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
         h.keys().hasOnly(['kicker', 'title', 'description', 'imageUrl', 'ctaLabel']) &&
-        isValidString(h.kicker, 0, 120) &&
-        isValidString(h.title, 1, 200) &&
-        isValidString(h.description, 0, 1200) &&
-        isValidString(h.imageUrl, 0, 550000) &&
-        isValidString(h.ctaLabel, 1, 80);
+        h.kicker is string && h.kicker.size() <= 120 &&
+        h.title is string && h.title.size() >= 1 && h.title.size() <= 200 &&
+        h.description is string && h.description.size() <= 1200 &&
+        h.imageUrl is string && h.imageUrl.size() <= 550000 &&
+        h.ctaLabel is string && h.ctaLabel.size() >= 1 && h.ctaLabel.size() <= 80;
     }
 
     function isValidTikTokConfig(t) {
       return t is map &&
         t.keys().hasAll(['title', 'description', 'profileUrl', 'handle']) &&
         t.keys().hasOnly(['title', 'description', 'profileUrl', 'handle']) &&
-        isValidString(t.title, 1, 160) &&
-        isValidString(t.description, 0, 1200) &&
-        isValidString(t.profileUrl, 0, 500) &&
-        isValidString(t.handle, 0, 80);
+        t.title is string && t.title.size() >= 1 && t.title.size() <= 160 &&
+        t.description is string && t.description.size() <= 1200 &&
+        t.profileUrl is string && t.profileUrl.size() <= 500 &&
+        t.handle is string && t.handle.size() <= 80;
     }
 
     function isValidContact(c) {
@@ -125,22 +130,46 @@ service cloud.firestore {
           'instagram',
           'facebook',
           'x',
+          'youtube',
+          'snapchat',
+          'linkedin',
+          'pinterest',
+          'threads',
+          'reddit',
+          'viber',
+          'imo',
+          'wechat',
+          'discord',
+          'twitch',
+          'website',
           'email',
           'mapsUrl',
           'landmarkNote'
         ]) &&
-        isValidString(c.addressLine, 0, 240) &&
-        isValidString(c.cityCountry, 0, 160) &&
-        isValidString(c.hours, 0, 160) &&
-        isValidString(c.phone, 0, 60) &&
-        isValidString(c.whatsapp, 0, 200) &&
-        (!('telegram' in c) || c.telegram == null || isValidString(c.telegram, 0, 200)) &&
-        (!('instagram' in c) || c.instagram == null || isValidString(c.instagram, 0, 200)) &&
-        (!('facebook' in c) || c.facebook == null || isValidString(c.facebook, 0, 200)) &&
-        (!('x' in c) || c.x == null || isValidString(c.x, 0, 200)) &&
-        isValidString(c.email, 0, 254) &&
-        isValidString(c.mapsUrl, 0, 500) &&
-        isValidString(c.landmarkNote, 0, 240);
+        c.addressLine is string && c.addressLine.size() <= 240 &&
+        c.cityCountry is string && c.cityCountry.size() <= 160 &&
+        c.hours is string && c.hours.size() <= 160 &&
+        c.phone is string && c.phone.size() <= 60 &&
+        c.whatsapp is string && c.whatsapp.size() <= 300 &&
+        c.email is string && c.email.size() <= 254 &&
+        c.mapsUrl is string && c.mapsUrl.size() <= 500 &&
+        c.landmarkNote is string && c.landmarkNote.size() <= 240 &&
+        optStr(c, 'telegram', 300) &&
+        optStr(c, 'instagram', 300) &&
+        optStr(c, 'facebook', 300) &&
+        optStr(c, 'x', 300) &&
+        optStr(c, 'youtube', 300) &&
+        optStr(c, 'snapchat', 300) &&
+        optStr(c, 'linkedin', 300) &&
+        optStr(c, 'pinterest', 300) &&
+        optStr(c, 'threads', 300) &&
+        optStr(c, 'reddit', 300) &&
+        optStr(c, 'viber', 300) &&
+        optStr(c, 'imo', 300) &&
+        optStr(c, 'wechat', 300) &&
+        optStr(c, 'discord', 300) &&
+        optStr(c, 'twitch', 300) &&
+        optStr(c, 'website', 500);
     }
 
     function isValidShowroomConfig(data) {
@@ -376,6 +405,9 @@ service cloud.firestore {
           'location',
           'timestampMillis',
           'decision',
+          'sourcePage',
+          'attemptType',
+          'browser',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -389,27 +421,116 @@ service cloud.firestore {
         isValidString(data.location, 1, 160) &&
         data.timestampMillis is number && data.timestampMillis >= 0 &&
         data.decision in ['pending', 'confirmed_me', 'rejected_not_me'] &&
+        (!('sourcePage' in data) || data.sourcePage == null || isValidString(data.sourcePage, 0, 120)) &&
+        (!('attemptType' in data) || data.attemptType == null || isValidString(data.attemptType, 0, 60)) &&
+        (!('browser' in data) || data.browser == null || isValidString(data.browser, 0, 80)) &&
         isValidTimestamp(data.createdAt) &&
         isValidTimestamp(data.updatedAt);
     }
 
+    function isValidAdminLoginAttempt(attemptId, data) {
+      return data.keys().hasAll([
+          'id',
+          'email',
+          'deviceName',
+          'platform',
+          'sourcePage',
+          'location',
+          'status',
+          'timestampMillis',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'email',
+          'deviceName',
+          'platform',
+          'sourcePage',
+          'location',
+          'status',
+          'browser',
+          'reason',
+          'timestampMillis',
+          'createdAt'
+        ]) &&
+        data.id == attemptId &&
+        isValidId(data.id) &&
+        isValidString(data.email, 0, 254) &&
+        isValidString(data.deviceName, 1, 160) &&
+        isValidString(data.platform, 1, 60) &&
+        isValidString(data.sourcePage, 1, 120) &&
+        data.sourcePage.lower().matches('.*admin.*') &&
+        isValidString(data.location, 0, 160) &&
+        data.status in ['failed', 'denied', 'attempt'] &&
+        (!('browser' in data) || data.browser == null || isValidString(data.browser, 0, 80)) &&
+        (!('reason' in data) || data.reason == null || isValidString(data.reason, 0, 240)) &&
+        data.timestampMillis is number && data.timestampMillis >= 0 &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidPageVisit(visitId, data) {
+      return data.keys().hasAll(['id', 'page', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'page', 'visitorId', 'dateKey', 'referrer', 'userAgent', 'createdAt']) &&
+        data.id == visitId &&
+        isValidId(data.id) &&
+        isValidString(data.page, 1, 120) &&
+        (!('visitorId' in data) || data.visitorId == null || isValidString(data.visitorId, 0, 128)) &&
+        (!('dateKey' in data) || data.dateKey == null || isValidString(data.dateKey, 0, 20)) &&
+        (!('referrer' in data) || data.referrer == null || isValidString(data.referrer, 0, 300)) &&
+        (!('userAgent' in data) || data.userAgent == null || isValidString(data.userAgent, 0, 300)) &&
+        isValidTimestamp(data.createdAt);
+    }
+
+    function isValidVisitorStatsDoc(data) {
+      return data.keys().hasAll(['totalVisits', 'updatedAt']) &&
+        data.keys().hasOnly(['totalVisits', 'uniqueVisitors', 'todayVisits', 'todayKey', 'lastPage', 'updatedAt']) &&
+        data.totalVisits is number && data.totalVisits >= 0 && data.totalVisits <= 1000000000 &&
+        (!('uniqueVisitors' in data) || data.uniqueVisitors == null || (data.uniqueVisitors is number && data.uniqueVisitors >= 0 && data.uniqueVisitors <= 1000000000)) &&
+        (!('todayVisits' in data) || data.todayVisits == null || (data.todayVisits is number && data.todayVisits >= 0 && data.todayVisits <= 100000000)) &&
+        (!('todayKey' in data) || data.todayKey == null || isValidString(data.todayKey, 0, 20)) &&
+        (!('lastPage' in data) || data.lastPage == null || isValidString(data.lastPage, 0, 120)) &&
+        isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidVisitorStatsCreate(data) {
+      return isValidVisitorStatsDoc(data) &&
+        data.totalVisits == 1 &&
+        (!('uniqueVisitors' in data) || data.uniqueVisitors == null || data.uniqueVisitors <= 1) &&
+        (!('todayVisits' in data) || data.todayVisits == null || data.todayVisits <= 1);
+    }
+
+    function isValidVisitorStatsUpdate(prev, next) {
+      return isValidVisitorStatsDoc(next) &&
+        next.totalVisits == prev.totalVisits + 1 &&
+        (
+          !('uniqueVisitors' in next) || next.uniqueVisitors == null ||
+          !('uniqueVisitors' in prev) || prev.uniqueVisitors == null ||
+          next.uniqueVisitors == prev.uniqueVisitors ||
+          next.uniqueVisitors == prev.uniqueVisitors + 1
+        ) &&
+        (
+          !('todayVisits' in next) || next.todayVisits == null ||
+          next.todayVisits == 1 ||
+          ('todayVisits' in prev && prev.todayVisits is number && next.todayVisits == prev.todayVisits + 1)
+        );
+    }
+
     match /config/{configId} {
-      allow get: if isValidId(configId) && (
+      allow get: if (
         configId == 'showroom' ||
         (configId == 'adminAccess' && isVerifiedUser() && isAdmin()) ||
         (configId == 'security' && isVerifiedUser() && isAdminIdentity()) ||
         (configId == 'authenticator' && isVerifiedUser() && isAdmin())
       );
       allow list: if false;
-      allow create: if isVerifiedUser() && isValidId(configId) && (
+      allow create: if isAdmin() && (
         (configId == 'showroom' && isValidShowroomConfig(incoming())) ||
         (configId == 'adminAccess' && isValidAdminAccessConfig(incoming())) ||
         (configId == 'security' && isValidSecurityConfig(incoming())) ||
         (configId == 'authenticator' && isValidAuthenticatorConfig(incoming()))
-      ) && isAdmin();
-      allow update: if isVerifiedUser() && isValidId(configId) && (
-        (configId == 'showroom' && isValidShowroomConfig(incoming()) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['branding', 'hero', 'tiktok', 'contact', 'updatedAt'])) ||
+      );
+      allow update: if isAdmin() && (
+        (configId == 'showroom' && isValidShowroomConfig(incoming())) ||
         (configId == 'adminAccess' && isValidAdminAccessConfig(incoming()) &&
           incoming().diff(existing()).affectedKeys().hasOnly(['adminEmails', 'updatedAt'])) ||
         (configId == 'security' && isValidSecurityConfig(incoming()) &&
@@ -423,7 +544,7 @@ service cloud.firestore {
             'updatedByEmail',
             'updatedAt'
           ]))
-      ) && isAdmin();
+      );
       allow delete: if false;
     }
 
@@ -572,6 +693,28 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['location', 'updatedAt'])
           )
         );
+      allow delete: if false;
+    }
+
+    match /adminLoginAttempts/{attemptId} {
+      allow get: if isVerifiedUser() && isValidId(attemptId) && isAdmin();
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isValidId(attemptId) && isValidAdminLoginAttempt(attemptId, incoming());
+      allow update, delete: if false;
+    }
+
+    match /pageVisits/{visitId} {
+      allow get: if isVerifiedUser() && isValidId(visitId) && isAdmin();
+      allow list: if isVerifiedUser() && isAdmin();
+      allow create: if isValidId(visitId) && isValidPageVisit(visitId, incoming());
+      allow update, delete: if false;
+    }
+
+    match /siteStats/{statId} {
+      allow get: if isVerifiedUser() && isValidId(statId) && statId == 'visitors' && isAdmin();
+      allow list: if false;
+      allow create: if isValidId(statId) && statId == 'visitors' && isValidVisitorStatsCreate(incoming());
+      allow update: if isValidId(statId) && statId == 'visitors' && isValidVisitorStatsUpdate(existing(), incoming());
       allow delete: if false;
     }
   }

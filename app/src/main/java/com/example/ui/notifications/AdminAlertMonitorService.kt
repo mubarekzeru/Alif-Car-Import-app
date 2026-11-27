@@ -12,7 +12,6 @@ import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.auth.isUserVerified
 import com.example.data.model.AdminDeviceStatus
-import com.example.data.model.CustomerInquiry
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
 import com.google.firebase.Firebase
@@ -24,19 +23,22 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 
 /**
- * Keeps real-time Firestore listeners alive in the background so customer inquiries
- * and new admin sign-ins (Mobile App & Website) trigger immediate heads-up notifications
+ * Keeps real-time Firestore listeners alive in the background so Admin Page sign-ins
+ * and failed/unauthorized Admin Page login attempts trigger immediate heads-up notifications
  * even when the app is closed or the screen is off.
+ * Public website home dashboard / visitor page activity does NOT trigger notifications.
  */
 class AdminAlertMonitorService : Service() {
 
     private var authListener: FirebaseAuth.AuthStateListener? = null
     private var loginAlertsListener: ListenerRegistration? = null
     private var adminSessionsListener: ListenerRegistration? = null
-    private var inquiriesListener: ListenerRegistration? = null
+    private var adminAttemptsListener: ListenerRegistration? = null
     private var observedUid: String? = null
     private var initialSessionsLoaded: Boolean = false
+    private var initialAttemptsLoaded: Boolean = false
     private val seenActiveSessionIds = mutableSetOf<String>()
+    private val seenAttemptIds = mutableSetOf<String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -110,7 +112,9 @@ class AdminAlertMonitorService : Service() {
         detachListeners()
         observedUid = uid
         initialSessionsLoaded = false
+        initialAttemptsLoaded = false
         seenActiveSessionIds.clear()
+        seenAttemptIds.clear()
 
         val db = runCatching {
             FirebaseFirestore.getInstance(getString(R.string.firestore_database_id))
@@ -121,19 +125,19 @@ class AdminAlertMonitorService : Service() {
             .getString(KEY_DEVICE_ID, "")
             .orEmpty()
 
-        // 1. Live Admin Login Alerts listener (web & mobile sign-ins)
+        // 1. Live Admin Page Login Alerts listener (web admin & mobile admin sign-ins only)
         loginAlertsListener = db.collection(COL_LOGIN_ALERTS)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
                 snapshot.documents.forEach { doc ->
                     val alert = parseAlert(doc) ?: return@forEach
-                    if (alert.decision == LoginAlertDecision.PENDING) {
+                    if (alert.decision == LoginAlertDecision.PENDING && alert.isAdminPageEvent) {
                         SecurityNotificationHelper.showLoginAlertNotification(applicationContext, alert)
                     }
                 }
             }
 
-        // 2. Live Admin Sessions listener (catches website/mobile logins even if alert doc wasn't written)
+        // 2. Live Admin Sessions listener (catches website admin logins even if alert doc wasn't written)
         adminSessionsListener = db.collection(COL_ADMIN_SESSIONS)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
@@ -149,14 +153,20 @@ class AdminAlertMonitorService : Service() {
                     if (seenActiveSessionIds.add(doc.id)) {
                         val devId = doc.getString("deviceId").orEmpty()
                         if (localDeviceId.isNotBlank() && devId == localDeviceId) return@forEach
+                        val sourcePage = doc.getString("sourcePage")
+                            ?: doc.getString("page")
+                            ?: "admin"
+                        val rawPlatform = doc.getString("platform").orEmpty().trim()
+                        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, rawPlatform)) {
+                            return@forEach
+                        }
                         val loginMillis = (doc.get("loginAtMillis") as? Number)?.toLong()
                             ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
                             ?: System.currentTimeMillis()
-                        val rawPlatform = doc.getString("platform").orEmpty().trim()
                         val platform = when {
                             rawPlatform.isBlank() ||
                                 rawPlatform.equals("web", ignoreCase = true) ||
-                                rawPlatform.equals("browser", ignoreCase = true) -> "Website"
+                                rawPlatform.equals("browser", ignoreCase = true) -> "Website Admin"
                             else -> rawPlatform
                         }
                         val synthetic = LoginSecurityAlert(
@@ -167,50 +177,90 @@ class AdminAlertMonitorService : Service() {
                             platform = platform,
                             location = doc.getString("location").orEmpty().trim().ifBlank { "Unknown location" },
                             timestampMillis = loginMillis,
-                            decision = LoginAlertDecision.PENDING
+                            decision = LoginAlertDecision.PENDING,
+                            sourcePage = sourcePage
                         )
                         SecurityNotificationHelper.showLoginAlertNotification(applicationContext, synthetic)
                     }
                 }
             }
 
-        // 3. Live Customer Inquiries listener (website customer leads)
-        inquiriesListener = db.collection(COL_INQUIRIES)
+        // 3. Live Admin Page Login Attempts listener (alerts immediately if someone tries to log into the Admin Page)
+        adminAttemptsListener = db.collection(COL_ADMIN_LOGIN_ATTEMPTS)
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(30)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-                val inquiries = snapshot.documents.mapNotNull { doc ->
-                    val data = doc.data ?: return@mapNotNull null
-                    CustomerInquiry(
-                        id = (data["id"] as? String).orEmpty().ifBlank { doc.id },
-                        name = (data["name"] as? String).orEmpty(),
-                        phone = (data["phone"] as? String).orEmpty(),
-                        email = (data["email"] as? String).orEmpty(),
-                        vehicleTitle = (data["vehicleTitle"] as? String).orEmpty(),
-                        message = (data["message"] as? String).orEmpty(),
-                        createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    )
+                val docs = snapshot.documents
+                if (!initialAttemptsLoaded) {
+                    docs.forEach { seenAttemptIds.add(it.id) }
+                    initialAttemptsLoaded = true
+                    return@addSnapshotListener
                 }
-                SecurityNotificationHelper.showNewInquiriesIfNeeded(applicationContext, inquiries)
+                docs.forEach { doc ->
+                    if (seenAttemptIds.add(doc.id)) {
+                        val alert = parseAttemptAsAlert(doc) ?: return@forEach
+                        if (alert.isAdminPageEvent) {
+                            SecurityNotificationHelper.showLoginAlertNotification(applicationContext, alert)
+                        }
+                    }
+                }
             }
     }
 
     private fun parseAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
         val data = doc.data ?: return null
         val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val sourcePage = (data["sourcePage"] as? String)
+            ?: (data["page"] as? String)
+            ?: "admin"
+        val attemptType = (data["attemptType"] as? String).orEmpty()
+        val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
+        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, attemptType)) {
+            return null
+        }
         val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
             ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
             ?: System.currentTimeMillis()
+        val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
+            attemptType.contains("denied", ignoreCase = true) ||
+            attemptType.contains("unauthorized", ignoreCase = true)
         return LoginSecurityAlert(
             id = id,
             sessionId = (data["sessionId"] as? String).orEmpty(),
             email = (data["email"] as? String).orEmpty().trim(),
             deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Admin Device" },
-            platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website" },
+            platform = platform,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             timestampMillis = tsMillis,
-            decision = LoginAlertDecision.fromValue(data["decision"] as? String)
+            decision = LoginAlertDecision.fromValue(data["decision"] as? String),
+            sourcePage = sourcePage,
+            isUnauthorizedAttempt = isUnauthorized
+        )
+    }
+
+    private fun parseAttemptAsAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
+        val data = doc.data ?: return null
+        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val sourcePage = (data["sourcePage"] as? String).orEmpty().trim()
+        val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
+        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, "admin_login_attempt")) {
+            return null
+        }
+        val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
+            ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: System.currentTimeMillis()
+        return LoginSecurityAlert(
+            id = "attempt_$id",
+            sessionId = "",
+            email = (data["email"] as? String).orEmpty().trim(),
+            deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Unknown Device" },
+            platform = platform,
+            location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
+            timestampMillis = tsMillis,
+            decision = LoginAlertDecision.REJECTED_NOT_ME,
+            sourcePage = sourcePage.ifBlank { "/admin" },
+            isUnauthorizedAttempt = true
         )
     }
 
@@ -219,11 +269,13 @@ class AdminAlertMonitorService : Service() {
         loginAlertsListener = null
         adminSessionsListener?.remove()
         adminSessionsListener = null
-        inquiriesListener?.remove()
-        inquiriesListener = null
+        adminAttemptsListener?.remove()
+        adminAttemptsListener = null
         observedUid = null
         initialSessionsLoaded = false
+        initialAttemptsLoaded = false
         seenActiveSessionIds.clear()
+        seenAttemptIds.clear()
     }
 
     companion object {
@@ -236,7 +288,7 @@ class AdminAlertMonitorService : Service() {
         private const val KEY_DEVICE_ID = "local_device_id"
         private const val COL_LOGIN_ALERTS = "loginAlerts"
         private const val COL_ADMIN_SESSIONS = "adminSessions"
-        private const val COL_INQUIRIES = "inquiries"
+        private const val COL_ADMIN_LOGIN_ATTEMPTS = "adminLoginAttempts"
 
         fun startIfEnabled(context: Context) {
             val appCtx = context.applicationContext

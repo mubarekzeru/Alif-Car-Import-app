@@ -498,4 +498,139 @@ class ExampleUnitTest {
         assertTrue(resolver.isTikTokCdnHost("p19-pu-sign-useast8.tiktokcdn-us.com"))
         assertFalse(resolver.isTikTokCdnHost("example.com"))
     }
+
+    @Test
+    fun loginSecurityAlert_allowsOnlyAdminPageEventsAndBlocksVisitorHomeEvents() {
+        val check = com.example.data.model.LoginSecurityAlert.Companion::isAdminPageLoginEvent
+
+        // Admin page & admin app login attempts MUST pass
+        assertTrue(check("/admin", "Website Admin", "login"))
+        assertTrue(check("/admin/login", "Website", "failed_login"))
+        assertTrue(check("admin_page", "Website", "admin_login_attempt"))
+        assertTrue(check("", "Mobile App", ""))
+        assertTrue(check("Mobile Admin App", "Mobile App", ""))
+
+        // Visitor / home / dashboard / public page events MUST be rejected
+        assertFalse(check("/", "Website", "visit"))
+        assertFalse(check("/home", "Website", "page_view"))
+        assertFalse(check("home_dashboard", "Website", ""))
+        assertFalse(check("/visitors", "Website", ""))
+        assertFalse(check("visitor_page", "Website", ""))
+        assertFalse(check("public_storefront", "Website", ""))
+        assertFalse(check("showroom", "Website", ""))
+        assertFalse(check("/dashboard", "Website", "page_view"))
+    }
+
+    @Test
+    fun showroomConfigToFirestoreMap_includesAllSocialPlatformsAndOmitsBlankOptionals() {
+        val map = com.example.data.model.ShowroomConfig(
+            contact = com.example.data.model.ContactConfig(
+                phone = "+251911000000",
+                youtube = "https://youtube.com/@alifcarimport",
+                snapchat = "@alifcarimport",
+                linkedin = "https://linkedin.com/company/alifcarimport",
+                threads = "@alifcarimport",
+                pinterest = "https://pinterest.com/alifcarimport",
+                reddit = "https://reddit.com/u/alifcarimport",
+                viber = "+251911000000",
+                imo = "+251911000000",
+                wechat = "alifcarimport_cn",
+                discord = "https://discord.gg/alifcarimport",
+                twitch = "https://twitch.tv/alifcarimport",
+                website = "https://alifcarimport.com",
+                instagram = ""
+            )
+        ).toFirestoreMap()
+
+        val contact = map["contact"] as Map<*, *>
+        assertEquals("https://youtube.com/@alifcarimport", contact["youtube"])
+        assertEquals("@alifcarimport", contact["snapchat"])
+        assertEquals("https://linkedin.com/company/alifcarimport", contact["linkedin"])
+        assertEquals("@alifcarimport", contact["threads"])
+        assertEquals("https://pinterest.com/alifcarimport", contact["pinterest"])
+        assertEquals("https://reddit.com/u/alifcarimport", contact["reddit"])
+        assertEquals("+251911000000", contact["viber"])
+        assertEquals("+251911000000", contact["imo"])
+        assertEquals("alifcarimport_cn", contact["wechat"])
+        assertEquals("https://discord.gg/alifcarimport", contact["discord"])
+        assertEquals("https://twitch.tv/alifcarimport", contact["twitch"])
+        assertEquals("https://alifcarimport.com", contact["website"])
+        assertFalse(contact.containsKey("instagram"))
+    }
+
+    @Test
+    fun visitorTimeRange_hidesCurrentlySelectedOptionInPicker() {
+        val daysWithoutOneDay = com.example.data.model.VisitorTimeRange.optionsForUnitExcluding(
+            unit = com.example.data.model.VisitorRangeUnit.DAYS,
+            selected = com.example.data.model.VisitorTimeRange.ONE_DAY
+        )
+        assertFalse(daysWithoutOneDay.contains(com.example.data.model.VisitorTimeRange.ONE_DAY))
+        assertTrue(daysWithoutOneDay.contains(com.example.data.model.VisitorTimeRange.SEVEN_DAYS))
+
+        // When user switches to 1 Week, 1 Day reappears under Days and 1 Week disappears under Weeks
+        val daysWhenWeekSelected = com.example.data.model.VisitorTimeRange.optionsForUnitExcluding(
+            unit = com.example.data.model.VisitorRangeUnit.DAYS,
+            selected = com.example.data.model.VisitorTimeRange.ONE_WEEK
+        )
+        assertTrue(daysWhenWeekSelected.contains(com.example.data.model.VisitorTimeRange.ONE_DAY))
+
+        val weeksWithoutOneWeek = com.example.data.model.VisitorTimeRange.optionsForUnitExcluding(
+            unit = com.example.data.model.VisitorRangeUnit.WEEKS,
+            selected = com.example.data.model.VisitorTimeRange.ONE_WEEK
+        )
+        assertFalse(weeksWithoutOneWeek.contains(com.example.data.model.VisitorTimeRange.ONE_WEEK))
+        assertTrue(weeksWithoutOneWeek.contains(com.example.data.model.VisitorTimeRange.FOUR_WEEKS))
+    }
+
+    @Test
+    fun interactionsAnalyticsEngine_computesGrowthBucketsAndTopPagesAcrossTimeframes() {
+        val now = 1_760_000_000_000L
+        val hour = 60L * 60L * 1000L
+        val day = 24L * hour
+        val records = listOf(
+            // 3 visits inside last 1 day (2 unique visitors, 1 repeat)
+            com.example.data.model.PageVisitRecord("v1", "/", "u1", "2026-10-10", now - 1 * hour),
+            com.example.data.model.PageVisitRecord("v2", "/inventory", "u1", "2026-10-10", now - 2 * hour),
+            com.example.data.model.PageVisitRecord("v3", "/", "u2", "2026-10-10", now - 5 * hour),
+            // 1 visit in previous 1-day window -> growth = (3 - 1) / 1 = +200%
+            com.example.data.model.PageVisitRecord("v4", "/contact", "u3", "2026-10-09", now - 30 * hour),
+            // 1 older visit 20 days ago (included in 1 Year, excluded from 1 Week)
+            com.example.data.model.PageVisitRecord("v5", "/tiktok", "u4", "2026-09-20", now - 20 * day)
+        )
+        val stats = com.example.data.model.WebsiteVisitorStats(
+            totalVisits = 5L,
+            todayVisits = 3L,
+            last7DaysVisits = 4L,
+            uniqueVisitors = 4L,
+            lastVisitAtMillis = now - 1 * hour,
+            recentVisitRecords = records,
+            isLoaded = true
+        )
+
+        val oneDay = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = stats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.ONE_DAY,
+            nowMillis = now
+        )
+        assertEquals(3L, oneDay.periodVisits)
+        assertEquals(1L, oneDay.previousPeriodVisits)
+        assertEquals(200, oneDay.growthPercent)
+        assertEquals(2L, oneDay.uniqueVisitors)
+        assertEquals(1L, oneDay.returningVisits)
+        assertEquals(6, oneDay.buckets.size)
+        assertEquals("Home Dashboard", oneDay.topPages.first().displayName)
+        assertEquals(2L, oneDay.topPages.first().visits)
+
+        val oneYear = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = stats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.ONE_YEAR,
+            nowMillis = now
+        )
+        assertEquals(5L, oneYear.periodVisits)
+        assertEquals(12, oneYear.buckets.size)
+    }
 }
+
+

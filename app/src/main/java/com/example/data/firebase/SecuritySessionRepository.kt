@@ -76,9 +76,13 @@ class SecuritySessionRepository(
 
     private var remoteSessionsListener: ListenerRegistration? = null
     private var remoteAlertsListener: ListenerRegistration? = null
+    private var remoteAttemptsListener: ListenerRegistration? = null
     private var securityPolicyListener: ListenerRegistration? = null
     private var authenticatorListener: ListenerRegistration? = null
     private var activeAlertCallback: ((LoginSecurityAlert) -> Unit)? = null
+    @Volatile
+    private var initialAttemptsLoaded: Boolean = false
+    private val seenAttemptIds = mutableSetOf<String>()
     private val sessionWriteMutex = Mutex()
     @Volatile
     private var currentAuthTimeMillis: Long = 0L
@@ -137,7 +141,7 @@ class SecuritySessionRepository(
                     val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
                     mergeRemoteSessions(remoteList, mySessionId)
 
-                    // If another device signed in and wrote to adminSessions without a matching loginAlerts doc,
+                    // If another device signed in to the Admin Page and wrote to adminSessions without a matching loginAlerts doc,
                     // surface a pending LoginSecurityAlert immediately so the admin gets notified and can verify/revoke it.
                     remoteList
                         .filter { !it.isCurrentDevice && it.status == AdminDeviceStatus.ACTIVE }
@@ -152,9 +156,12 @@ class SecuritySessionRepository(
                                     location = remoteSession.location,
                                     timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
                                         ?: remoteSession.lastActiveMillis,
-                                    decision = LoginAlertDecision.PENDING
+                                    decision = LoginAlertDecision.PENDING,
+                                    sourcePage = "admin"
                                 )
-                                if (_alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }) {
+                                if (syntheticAlert.isAdminPageEvent &&
+                                    _alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }
+                                ) {
                                     prependLocalAlert(syntheticAlert)
                                     activeAlertCallback?.invoke(syntheticAlert)
                                 }
@@ -176,7 +183,7 @@ class SecuritySessionRepository(
                     val existingIds = _alerts.value.map { it.id }.toSet()
                     val remoteAlerts = snapshot.documents.mapNotNull { doc ->
                         parseRemoteAlert(doc)
-                    }
+                    }.filter { it.isAdminPageEvent }
 
                     mergeRemoteAlerts(remoteAlerts)
                     remoteAlerts
@@ -184,6 +191,36 @@ class SecuritySessionRepository(
                         .forEach { alert ->
                             activeAlertCallback?.invoke(alert)
                         }
+                }
+
+            remoteAttemptsListener = db.collection(COL_ADMIN_LOGIN_ATTEMPTS)
+                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .limit(30)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        if (error.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                            handleFirestoreError(error, OperationType.LIST, COL_ADMIN_LOGIN_ATTEMPTS)
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null) return@addSnapshotListener
+                    val parsed = snapshot.documents.mapNotNull { doc ->
+                        parseRemoteAttemptAsAlert(doc)
+                    }.filter { it.isAdminPageEvent }
+
+                    if (parsed.isNotEmpty()) {
+                        mergeRemoteAlerts(parsed)
+                    }
+                    if (!initialAttemptsLoaded) {
+                        parsed.forEach { seenAttemptIds.add(it.id) }
+                        initialAttemptsLoaded = true
+                        return@addSnapshotListener
+                    }
+                    parsed.forEach { alert ->
+                        if (seenAttemptIds.add(alert.id)) {
+                            activeAlertCallback?.invoke(alert)
+                        }
+                    }
                 }
             securityPolicyListener = db.collection(COL_CONFIG)
                 .document(DOC_SECURITY)
@@ -225,11 +262,15 @@ class SecuritySessionRepository(
         remoteSessionsListener = null
         remoteAlertsListener?.remove()
         remoteAlertsListener = null
+        remoteAttemptsListener?.remove()
+        remoteAttemptsListener = null
         securityPolicyListener?.remove()
         securityPolicyListener = null
         authenticatorListener?.remove()
         authenticatorListener = null
         activeAlertCallback = null
+        initialAttemptsLoaded = false
+        seenAttemptIds.clear()
     }
 
     suspend fun registerCurrentDeviceSignIn(
@@ -389,7 +430,15 @@ class SecuritySessionRepository(
             val remoteAlerts = alertsSnapshot.documents.mapNotNull { doc ->
                 parseRemoteAlert(doc)
             }
-            mergeRemoteAlerts(remoteAlerts)
+            val remoteAttempts = runCatching {
+                db.collection(COL_ADMIN_LOGIN_ATTEMPTS)
+                    .get(Source.SERVER)
+                    .await()
+                    .documents
+                    .mapNotNull { doc -> parseRemoteAttemptAsAlert(doc) }
+            }.getOrDefault(emptyList())
+            val combinedRemoteAlerts = remoteAlerts + remoteAttempts
+            mergeRemoteAlerts(combinedRemoteAlerts)
             _cloudSyncError.value = null
 
             val knownAlertSessionIds = existingAlertSessionIds + remoteAlerts.map { it.sessionId }
@@ -406,17 +455,24 @@ class SecuritySessionRepository(
                             location = remoteSession.location,
                             timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
                                 ?: remoteSession.lastActiveMillis,
-                            decision = LoginAlertDecision.PENDING
+                            decision = LoginAlertDecision.PENDING,
+                            sourcePage = if (remoteSession.isWebsiteSession) "/admin" else "Mobile Admin App"
                         )
-                        if (_alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }) {
+                        if (syntheticAlert.isAdminPageEvent &&
+                            _alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }
+                        ) {
                             prependLocalAlert(syntheticAlert)
                             activeAlertCallback?.invoke(syntheticAlert)
                         }
                     }
                 }
 
-            remoteAlerts
-                .filter { it.decision == LoginAlertDecision.PENDING && !existingAlertIds.contains(it.id) }
+            combinedRemoteAlerts
+                .filter {
+                    it.isAdminPageEvent &&
+                        (it.decision == LoginAlertDecision.PENDING || it.isUnauthorizedAttempt) &&
+                        !existingAlertIds.contains(it.id)
+                }
                 .forEach { alert ->
                     activeAlertCallback?.invoke(alert)
                 }
@@ -1224,6 +1280,7 @@ class SecuritySessionRepository(
                 "location" to alert.location.trim().ifBlank { "Unknown location" }.take(160),
                 "timestampMillis" to alert.timestampMillis.coerceAtLeast(0L),
                 "decision" to alert.decision.value,
+                "sourcePage" to alert.sourcePage.trim().ifBlank { "admin" }.take(120),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -1345,18 +1402,56 @@ class SecuritySessionRepository(
     private fun parseRemoteAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
         val data = doc.data ?: return null
         val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val sourcePage = (data["sourcePage"] as? String)
+            ?: (data["page"] as? String)
+            ?: "admin"
+        val attemptType = (data["attemptType"] as? String).orEmpty()
+        val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
+        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, attemptType)) {
+            return null
+        }
         val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
             ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
             ?: System.currentTimeMillis()
+        val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
+            attemptType.contains("denied", ignoreCase = true) ||
+            attemptType.contains("unauthorized", ignoreCase = true)
         return LoginSecurityAlert(
             id = id,
             sessionId = (data["sessionId"] as? String).orEmpty(),
             email = (data["email"] as? String).orEmpty().trim(),
             deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Admin Device" },
-            platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website" },
+            platform = platform,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             timestampMillis = tsMillis,
-            decision = LoginAlertDecision.fromValue(data["decision"] as? String)
+            decision = LoginAlertDecision.fromValue(data["decision"] as? String),
+            sourcePage = sourcePage,
+            isUnauthorizedAttempt = isUnauthorized
+        )
+    }
+
+    private fun parseRemoteAttemptAsAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
+        val data = doc.data ?: return null
+        val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
+        val sourcePage = (data["sourcePage"] as? String).orEmpty().trim()
+        val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
+        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, "admin_login_attempt")) {
+            return null
+        }
+        val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
+            ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+            ?: System.currentTimeMillis()
+        return LoginSecurityAlert(
+            id = "attempt_$id",
+            sessionId = "",
+            email = (data["email"] as? String).orEmpty().trim(),
+            deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Unknown Device" },
+            platform = platform,
+            location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
+            timestampMillis = tsMillis,
+            decision = LoginAlertDecision.REJECTED_NOT_ME,
+            sourcePage = sourcePage.ifBlank { "/admin" },
+            isUnauthorizedAttempt = true
         )
     }
 
@@ -1501,13 +1596,18 @@ class SecuritySessionRepository(
                                     platform = obj.optString("platform", "Mobile App"),
                                     location = obj.optString("location", fallbackLocaleLocation()),
                                     timestampMillis = obj.optLong("timestampMillis"),
-                                    decision = LoginAlertDecision.fromValue(obj.optString("decision"))
+                                    decision = LoginAlertDecision.fromValue(obj.optString("decision")),
+                                    sourcePage = obj.optString("sourcePage", "admin"),
+                                    isUnauthorizedAttempt = obj.optBoolean("isUnauthorizedAttempt", false)
                                 )
                             )
                         }
                     }
                 }
-                _alerts.value = list.sortedByDescending { it.timestampMillis }.take(40)
+                _alerts.value = list
+                    .filter { it.isAdminPageEvent }
+                    .sortedByDescending { it.timestampMillis }
+                    .take(40)
             }
         }
     }
@@ -1543,6 +1643,8 @@ class SecuritySessionRepository(
                     put("location", a.location)
                     put("timestampMillis", a.timestampMillis)
                     put("decision", a.decision.value)
+                    put("sourcePage", a.sourcePage)
+                    put("isUnauthorizedAttempt", a.isUnauthorizedAttempt)
                 }
             )
         }
@@ -1621,6 +1723,7 @@ class SecuritySessionRepository(
 
         const val COL_ADMIN_SESSIONS = "adminSessions"
         const val COL_LOGIN_ALERTS = "loginAlerts"
+        const val COL_ADMIN_LOGIN_ATTEMPTS = "adminLoginAttempts"
         const val COL_CONFIG = "config"
         const val DOC_SECURITY = "security"
         const val DOC_AUTHENTICATOR = "authenticator"

@@ -72,10 +72,11 @@ fun AuthenticatorSecurityCard(
     onEnableAuthenticator: (secretBase32: String, code: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onDisableAuthenticator: (code: String, onComplete: (Result<String>) -> Unit) -> Unit,
     onShowQuickFeedback: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    initiallyExpanded: Boolean = false
 ) {
     val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember(initiallyExpanded) { mutableStateOf(initiallyExpanded) }
     var pendingSetup by remember { mutableStateOf<PendingAuthenticatorSetup?>(null) }
     var enableCodeInput by remember { mutableStateOf("") }
     var showDisableForm by remember { mutableStateOf(false) }

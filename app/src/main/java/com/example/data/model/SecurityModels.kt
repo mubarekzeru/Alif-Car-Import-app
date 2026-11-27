@@ -144,8 +144,79 @@ data class LoginSecurityAlert(
     val platform: String,
     val location: String,
     val timestampMillis: Long,
-    val decision: LoginAlertDecision = LoginAlertDecision.PENDING
-)
+    val decision: LoginAlertDecision = LoginAlertDecision.PENDING,
+    val sourcePage: String = "admin",
+    val isUnauthorizedAttempt: Boolean = false
+) {
+    val isAdminPageEvent: Boolean
+        get() = isAdminPageLoginEvent(
+            sourcePage = sourcePage,
+            platform = platform,
+            eventType = if (isUnauthorizedAttempt) "admin_login_attempt" else "admin_login"
+        )
+
+    companion object {
+        private val NON_ADMIN_PAGE_TOKENS = listOf(
+            "visitor",
+            "visitors",
+            "home_dashboard",
+            "homedashboard",
+            "public_home",
+            "storefront",
+            "showroom",
+            "catalog",
+            "page_view",
+            "pageview",
+            "website_visit",
+            "site_visit"
+        )
+
+        private val NON_ADMIN_EXACT_PAGES = setOf(
+            "/",
+            "home",
+            "/home",
+            "index",
+            "/index",
+            "dashboard",
+            "/dashboard",
+            "visitors",
+            "/visitors",
+            "visitor",
+            "/visitor",
+            "public",
+            "/public",
+            "inventory",
+            "/inventory",
+            "cars",
+            "/cars",
+            "vehicles",
+            "/vehicles"
+        )
+
+        fun isAdminPageLoginEvent(
+            sourcePage: String?,
+            platform: String? = null,
+            eventType: String? = null
+        ): Boolean {
+            val pageClean = sourcePage.orEmpty().trim().lowercase()
+            val typeClean = eventType.orEmpty().trim().lowercase()
+            val platformClean = platform.orEmpty().trim().lowercase()
+
+            if (typeClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { typeClean.contains(it) }) {
+                return false
+            }
+            if (platformClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { platformClean.contains(it) }) {
+                return false
+            }
+            if (pageClean.isNotEmpty()) {
+                if (pageClean.contains("admin")) return true
+                if (NON_ADMIN_EXACT_PAGES.contains(pageClean)) return false
+                if (NON_ADMIN_PAGE_TOKENS.any { pageClean.contains(it) }) return false
+            }
+            return true
+        }
+    }
+}
 
 data class PasswordChangeOutcome(
     val message: String

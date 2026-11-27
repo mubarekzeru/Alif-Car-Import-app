@@ -881,4 +881,173 @@ test("adminSessions: owner can repair own legacy doc into valid schema, but cann
   );
 });
 
+test("config/showroom: accepts all social media platforms (YouTube, Snapchat, LinkedIn, Threads, etc.)", async () => {
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const fullSocialPayload = {
+    branding: { companyName: "Alif Car Import", logoUrl: "", tagline: "Direct imports" },
+    hero: { kicker: "NEW", title: "Direct Imports", description: "Clean cars", imageUrl: "", ctaLabel: "Browse" },
+    tiktok: { title: "TikTok", description: "Clips", profileUrl: "https://www.tiktok.com/@alifcarimport", handle: "@alifcarimport" },
+    contact: {
+      addressLine: "Bole Road",
+      cityCountry: "Addis Ababa, Ethiopia",
+      hours: "Mon-Sat 9:00 AM - 6:00 PM",
+      phone: "+251900000000",
+      whatsapp: "https://wa.me/251900000000",
+      telegram: "https://t.me/alifcarimport",
+      instagram: "https://instagram.com/alifcarimport",
+      facebook: "https://facebook.com/alifcarimport",
+      x: "https://x.com/alifcarimport",
+      youtube: "https://youtube.com/@alifcarimport",
+      snapchat: "https://snapchat.com/add/alifcarimport",
+      linkedin: "https://linkedin.com/company/alifcarimport",
+      pinterest: "https://pinterest.com/alifcarimport",
+      threads: "https://threads.net/@alifcarimport",
+      reddit: "https://reddit.com/u/alifcarimport",
+      viber: "+251900000000",
+      imo: "+251900000000",
+      wechat: "alifcarimport",
+      discord: "https://discord.gg/alifcarimport",
+      twitch: "https://twitch.tv/alifcarimport",
+      website: "https://alifcarimport.com",
+      email: "info@alifcarimport.com",
+      mapsUrl: "https://maps.google.com/?q=Bole+Addis+Ababa",
+      landmarkNote: "Near Edna Mall",
+    },
+    updatedAt: pastTimestamp(),
+  };
+
+  await assertSucceeds(ownerDb.collection("config").doc("showroom").set(fullSocialPayload));
+  await assertFails(
+    ownerDb.collection("config").doc("showroom").set({
+      ...fullSocialPayload,
+      contact: { ...fullSocialPayload.contact, unexpectedField: "hack" },
+    })
+  );
+});
+
+test("adminLoginAttempts: allows logging admin-page attempts only, blocks visitor/home pages and non-admin reads", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  const validAttempt = {
+    id: "att_admin_001",
+    email: "intruder@example.com",
+    deviceName: "Chrome on Windows",
+    platform: "Website Admin",
+    sourcePage: "/admin/login",
+    location: "Addis Ababa, Ethiopia",
+    status: "denied",
+    browser: "Google Chrome",
+    reason: "Unauthorized account attempted admin login",
+    timestampMillis: Date.now() - 1000,
+    createdAt: pastTimestamp(1000),
+  };
+
+  // Public/non-admin can log an admin-page login attempt
+  await assertSucceeds(unauthDb.collection("adminLoginAttempts").doc("att_admin_001").set(validAttempt));
+
+  // Rejects home/visitor page attempts (sourcePage must target admin page)
+  await assertFails(
+    unauthDb.collection("adminLoginAttempts").doc("att_home_001").set({
+      ...validAttempt,
+      id: "att_home_001",
+      sourcePage: "/home",
+    })
+  );
+
+  // Only verified admin can read attempts; nobody can update or delete
+  await assertFails(unauthDb.collection("adminLoginAttempts").get());
+  await assertFails(nonAdminDb.collection("adminLoginAttempts").get());
+  await assertSucceeds(ownerDb.collection("adminLoginAttempts").get());
+  await assertFails(ownerDb.collection("adminLoginAttempts").doc("att_admin_001").delete());
+});
+
+test("pageVisits & siteStats/visitors: public can record visits (+1 only), only admin can read totals", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const nonAdminDb = testEnv
+    .authenticatedContext("user_uid", {
+      email: NON_ADMIN_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+  const ownerDb = testEnv
+    .authenticatedContext("owner_uid", {
+      email: BOOTSTRAP_EMAIL,
+      email_verified: true,
+    })
+    .firestore();
+
+  // Visitor records a dashboard/home page visit
+  await assertSucceeds(
+    unauthDb.collection("pageVisits").doc("visit_001").set({
+      id: "visit_001",
+      page: "/",
+      visitorId: "v_browser_abc",
+      dateKey: "2026-11-26",
+      createdAt: pastTimestamp(1000),
+    })
+  );
+  // Public & non-admin cannot read visitor logs
+  await assertFails(unauthDb.collection("pageVisits").get());
+  await assertFails(nonAdminDb.collection("pageVisits").get());
+  // Admin can read visitor logs
+  await assertSucceeds(ownerDb.collection("pageVisits").get());
+  await assertFails(ownerDb.collection("pageVisits").doc("visit_001").delete());
+
+  // siteStats/visitors create must start at 1 (blocks forged count inflation)
+  await assertFails(
+    unauthDb.collection("siteStats").doc("visitors").set({
+      totalVisits: 9999,
+      updatedAt: pastTimestamp(1000),
+    })
+  );
+  await assertSucceeds(
+    unauthDb.collection("siteStats").doc("visitors").set({
+      totalVisits: 1,
+      uniqueVisitors: 1,
+      todayVisits: 1,
+      todayKey: "2026-11-26",
+      lastPage: "/",
+      updatedAt: pastTimestamp(1000),
+    })
+  );
+  // Increment by +1 succeeds, jump by +5 fails
+  await assertSucceeds(
+    unauthDb.collection("siteStats").doc("visitors").update({
+      totalVisits: 2,
+      uniqueVisitors: 2,
+      todayVisits: 2,
+      updatedAt: pastTimestamp(500),
+    })
+  );
+  await assertFails(
+    unauthDb.collection("siteStats").doc("visitors").update({
+      totalVisits: 10,
+      updatedAt: pastTimestamp(200),
+    })
+  );
+
+  // Only verified admin can read siteStats/visitors
+  await assertFails(unauthDb.collection("siteStats").doc("visitors").get());
+  await assertFails(nonAdminDb.collection("siteStats").doc("visitors").get());
+  await assertSucceeds(ownerDb.collection("siteStats").doc("visitors").get());
+});
+
 

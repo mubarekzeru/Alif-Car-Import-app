@@ -35,9 +35,31 @@ data class ContactConfig(
     val instagram: String = "",
     val facebook: String = "",
     val x: String = "",
+    val youtube: String = "",
+    val snapchat: String = "",
+    val linkedin: String = "",
+    val pinterest: String = "",
+    val threads: String = "",
+    val reddit: String = "",
+    val viber: String = "",
+    val imo: String = "",
+    val wechat: String = "",
+    val discord: String = "",
+    val twitch: String = "",
+    val website: String = "",
     val email: String = "",
     val mapsUrl: String = "",
     val landmarkNote: String = ""
+)
+
+data class WebsiteVisitorStats(
+    val totalVisits: Long = 0L,
+    val todayVisits: Long = 0L,
+    val last7DaysVisits: Long = 0L,
+    val uniqueVisitors: Long = 0L,
+    val lastVisitAtMillis: Long = 0L,
+    val recentVisitRecords: List<PageVisitRecord> = emptyList(),
+    val isLoaded: Boolean = false
 )
 
 data class ShowroomConfig(
@@ -71,14 +93,26 @@ data class ShowroomConfig(
             put("cityCountry", contact.cityCountry.trim().take(160))
             put("hours", contact.hours.trim().take(160))
             put("phone", contact.phone.trim().take(60))
-            put("whatsapp", contact.whatsapp.trim().take(200))
+            put("whatsapp", contact.whatsapp.trim().take(300))
             put("email", contact.email.trim().take(254))
             put("mapsUrl", contact.mapsUrl.trim().take(500))
             put("landmarkNote", contact.landmarkNote.trim().take(240))
-            contact.telegram.trim().take(200).takeIf { it.isNotEmpty() }?.let { put("telegram", it) }
-            contact.instagram.trim().take(200).takeIf { it.isNotEmpty() }?.let { put("instagram", it) }
-            contact.facebook.trim().take(200).takeIf { it.isNotEmpty() }?.let { put("facebook", it) }
-            contact.x.trim().take(200).takeIf { it.isNotEmpty() }?.let { put("x", it) }
+            contact.telegram.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("telegram", it) }
+            contact.instagram.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("instagram", it) }
+            contact.facebook.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("facebook", it) }
+            contact.x.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("x", it) }
+            contact.youtube.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("youtube", it) }
+            contact.snapchat.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("snapchat", it) }
+            contact.linkedin.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("linkedin", it) }
+            contact.pinterest.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("pinterest", it) }
+            contact.threads.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("threads", it) }
+            contact.reddit.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("reddit", it) }
+            contact.viber.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("viber", it) }
+            contact.imo.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("imo", it) }
+            contact.wechat.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("wechat", it) }
+            contact.discord.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("discord", it) }
+            contact.twitch.trim().take(300).takeIf { it.isNotEmpty() }?.let { put("twitch", it) }
+            contact.website.trim().take(500).takeIf { it.isNotEmpty() }?.let { put("website", it) }
         }
         return mapOf(
             "branding" to cleanBranding,

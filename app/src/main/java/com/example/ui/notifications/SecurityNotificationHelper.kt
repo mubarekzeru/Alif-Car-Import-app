@@ -48,30 +48,20 @@ object SecurityNotificationHelper {
 
         val loginChannel = NotificationChannel(
             CHANNEL_LOGIN_ALERTS,
-            "Admin Login Alerts",
+            "Admin Page Login Alerts",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Instant heads-up alerts when an admin signs in on web or mobile app"
-            enableVibration(true)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        }
-
-        val inquiryChannel = NotificationChannel(
-            CHANNEL_INQUIRIES,
-            "Customer Inquiries",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Instant heads-up alerts when visitors submit vehicle inquiries on the website"
+            description = "Instant heads-up alerts only when someone tries to log into the Admin Page"
             enableVibration(true)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
         val monitorChannel = NotificationChannel(
             CHANNEL_LIVE_MONITOR,
-            "Live Alert Connection",
+            "Live Admin Alert Connection",
             NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "Keeps real-time alerts connected in the background so notifications pop up immediately"
+            description = "Keeps real-time admin login alerts connected in the background"
             setShowBadge(false)
             enableLights(false)
             enableVibration(false)
@@ -79,7 +69,6 @@ object SecurityNotificationHelper {
         }
 
         manager.createNotificationChannel(loginChannel)
-        manager.createNotificationChannel(inquiryChannel)
         manager.createNotificationChannel(monitorChannel)
     }
 
@@ -108,8 +97,8 @@ object SecurityNotificationHelper {
 
         return NotificationCompat.Builder(context, CHANNEL_LIVE_MONITOR)
             .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setContentTitle("Alif Car Import • Live Alerts Active")
-            .setContentText("Listening in real time for customer inquiries & admin sign-ins")
+            .setContentTitle("Alif Car Import • Admin Protection Active")
+            .setContentText("Listening only for Admin Page login attempts")
             .setOngoing(true)
             .setSilent(true)
             .setOnlyAlertOnce(true)
@@ -121,6 +110,7 @@ object SecurityNotificationHelper {
 
     @Synchronized
     fun showLoginAlertNotification(context: Context, alert: LoginSecurityAlert) {
+        if (!alert.isAdminPageEvent) return
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
 
@@ -151,8 +141,16 @@ object SecurityNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = "New Admin Sign-In (${alert.platform})"
-        val body = "${alert.email.ifBlank { "Admin" }} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
+        val title = if (alert.isUnauthorizedAttempt) {
+            "Admin Page Login Attempt (${alert.platform})"
+        } else {
+            "Admin Page Sign-In (${alert.platform})"
+        }
+        val body = if (alert.isUnauthorizedAttempt) {
+            "${alert.email.ifBlank { "Unknown account" }} tried to log into the Admin Page • ${alert.deviceName} • ${alert.location}."
+        } else {
+            "${alert.email.ifBlank { "Admin" }} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
+        }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_LOGIN_ALERTS)
             .setSmallIcon(R.mipmap.ic_launcher_round)
@@ -175,64 +173,12 @@ object SecurityNotificationHelper {
         }
     }
 
-    @Synchronized
+    /**
+     * Kept as a no-op so public visitor activity on the home dashboard / visitors page
+     * never triggers heads-up notifications (alerts are strictly for Admin Page logins).
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun showNewInquiriesIfNeeded(context: Context, inquiries: List<CustomerInquiry>) {
-        if (inquiries.isEmpty()) return
-        ensureChannels(context)
-        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val hasBaseline = prefs.contains(KEY_SEEN_INQUIRY_IDS)
-        val seen = prefs.getStringSet(KEY_SEEN_INQUIRY_IDS, emptySet()) ?: emptySet()
-        val allIds = inquiries.map { it.id }.take(100).toSet()
-
-        if (!hasBaseline) {
-            prefs.edit().putStringSet(KEY_SEEN_INQUIRY_IDS, allIds).apply()
-            return
-        }
-
-        val fresh = inquiries.filter { !seen.contains(it.id) }
-        if (fresh.isEmpty()) return
-
-        prefs.edit().putStringSet(KEY_SEEN_INQUIRY_IDS, (seen + allIds).take(150).toSet()).apply()
-        if (!hasNotificationPermission(context)) return
-
-        val latest = fresh.first()
-        val tapIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(EXTRA_OPEN_NOTIFICATIONS_TAB, TAB_INQUIRIES)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            latest.id.hashCode(),
-            tapIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val title = if (fresh.size == 1) {
-            "New Customer Inquiry from ${latest.name.ifBlank { "Visitor" }}"
-        } else {
-            "${fresh.size} New Customer Inquiries"
-        }
-        val vehiclePart = latest.vehicleTitle.takeIf { it.isNotBlank() }?.let { "$it — " } ?: ""
-        val body = "$vehiclePart${latest.message.ifBlank { latest.phone }}"
-
-        val notification = NotificationCompat.Builder(context, CHANNEL_INQUIRIES)
-            .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        runCatching {
-            NotificationManagerCompat.from(context).notify(
-                ("inq_" + latest.id).hashCode(),
-                notification
-            )
-        }
+        // Intentionally disabled: notifications are shown only for Admin Page login attempts.
     }
 }

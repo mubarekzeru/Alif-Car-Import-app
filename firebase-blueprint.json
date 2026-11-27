@@ -201,6 +201,67 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "AdminLoginAttempt": {
+      "title": "AdminLoginAttempt",
+      "description": "Unauthorized or failed attempt to log into the Admin Page (web /admin or admin app). Append-only create with admin-only read.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "platform": { "type": "string" },
+        "sourcePage": { "type": "string" },
+        "location": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["failed", "denied", "attempt"]
+        },
+        "browser": { "type": "string" },
+        "reason": { "type": "string" },
+        "timestampMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "email",
+        "deviceName",
+        "platform",
+        "sourcePage",
+        "location",
+        "status",
+        "timestampMillis",
+        "createdAt"
+      ]
+    },
+    "PageVisit": {
+      "title": "PageVisit",
+      "description": "Silent visitor count entry for the public website home/dashboard page displayed in admin Settings.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "page": { "type": "string" },
+        "visitorId": { "type": "string" },
+        "dateKey": { "type": "string" },
+        "referrer": { "type": "string" },
+        "userAgent": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "page", "createdAt"]
+    },
+    "SiteVisitorStats": {
+      "title": "SiteVisitorStats",
+      "description": "Aggregated website visitor counters incremented by +1 per visit and readable only by verified admins.",
+      "type": "object",
+      "properties": {
+        "totalVisits": { "type": "integer" },
+        "uniqueVisitors": { "type": "integer" },
+        "todayVisits": { "type": "integer" },
+        "todayKey": { "type": "string" },
+        "lastPage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["totalVisits", "updatedAt"]
     }
   },
   "firestore": {
@@ -210,7 +271,7 @@
     },
     "/config/showroom": {
       "schema": { "$ref": "#/entities/ShowroomConfig" },
-      "description": "Showroom branding, hero, TikTok config, and contact/social settings."
+      "description": "Showroom branding, hero, TikTok config, and full contact/social media links."
     },
     "/config/adminAccess": {
       "schema": { "$ref": "#/entities/AdminAccessConfig" },
@@ -238,7 +299,19 @@
     },
     "/loginAlerts/{alertId}": {
       "schema": { "$ref": "#/entities/LoginAlert" },
-      "description": "Real-time admin sign-in alerts for confirming or blocking devices."
+      "description": "Real-time admin page sign-in alerts for confirming or blocking devices."
+    },
+    "/adminLoginAttempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/AdminLoginAttempt" },
+      "description": "Failed or unauthorized attempts to log into the admin page."
+    },
+    "/pageVisits/{visitId}": {
+      "schema": { "$ref": "#/entities/PageVisit" },
+      "description": "Individual website dashboard/home visitor records for Settings analytics."
+    },
+    "/siteStats/{statId}": {
+      "schema": { "$ref": "#/entities/SiteVisitorStats" },
+      "description": "Aggregated website visitor totals (document ID: visitors)."
     }
   }
 }

@@ -145,12 +145,12 @@ fun NotificationsScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Login Alerts",
+                            text = "Admin Login Alerts",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Verify admin sign-ins across web & mobile",
+                            text = "Admin page login attempts only (not visitor pages)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -192,7 +192,7 @@ fun NotificationsScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Allow notifications so this phone alerts you immediately when another device signs into the admin portal.",
+                                text = "Allow notifications so this phone alerts you immediately when someone tries to sign into the Admin Page.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -632,12 +632,12 @@ private fun LoginAlertsList(
                         modifier = Modifier.size(30.dp)
                     )
                     Text(
-                        text = "No login alerts yet",
+                        text = "No admin login alerts yet",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Sign-ins and admin access attempts will appear here so you can confirm or immediately log out unrecognized access.",
+                        text = "Alerts appear here only when someone signs in or attempts to log into the Admin Page. Website visitor traffic is counted silently in Settings.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -645,16 +645,37 @@ private fun LoginAlertsList(
             }
         } else {
             alerts.forEach { alert ->
-                val (badgeBg, badgeFg) = when (alert.decision) {
-                    LoginAlertDecision.PENDING -> AmberReservedContainer to AmberReserved
-                    LoginAlertDecision.CONFIRMED_ME -> EmeraldContainer to EmeraldAvailable
-                    LoginAlertDecision.REJECTED_NOT_ME ->
-                        MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
+                val (badgeLabel, badgeBg, badgeFg) = if (alert.isUnauthorizedAttempt) {
+                    Triple(
+                        "Blocked Admin Attempt",
+                        MaterialTheme.colorScheme.errorContainer,
+                        MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    when (alert.decision) {
+                        LoginAlertDecision.PENDING ->
+                            Triple(alert.decision.label, AmberReservedContainer, AmberReserved)
+                        LoginAlertDecision.CONFIRMED_ME ->
+                            Triple(alert.decision.label, EmeraldContainer, EmeraldAvailable)
+                        LoginAlertDecision.REJECTED_NOT_ME ->
+                            Triple(
+                                alert.decision.label,
+                                MaterialTheme.colorScheme.errorContainer,
+                                MaterialTheme.colorScheme.error
+                            )
+                    }
                 }
 
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (alert.isUnauthorizedAttempt) {
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        }
+                    ),
                     shape = MaterialTheme.shapes.large,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -674,7 +695,7 @@ private fun LoginAlertsList(
                                 shape = CircleShape
                             ) {
                                 Text(
-                                    text = alert.decision.label,
+                                    text = badgeLabel,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = badgeFg,
@@ -748,7 +769,26 @@ private fun LoginAlertsList(
                             )
                         }
 
-                        if (alert.decision == LoginAlertDecision.PENDING) {
+                        if (alert.sourcePage.isNotBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Page: ${alert.sourcePage}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        if (!alert.isUnauthorizedAttempt && alert.decision == LoginAlertDecision.PENDING) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

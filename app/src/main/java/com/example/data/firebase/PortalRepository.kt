@@ -7,24 +7,33 @@ import com.example.data.model.BrandingConfig
 import com.example.data.model.ContactConfig
 import com.example.data.model.CustomerInquiry
 import com.example.data.model.HeroConfig
+import com.example.data.model.PageVisitRecord
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokPostDraft
 import com.example.data.model.TikTokSectionConfig
+import com.example.data.model.WebsiteVisitorStats
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.QuerySnapshot
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
@@ -63,6 +72,12 @@ class PortalRepository(
 
     private val inquiriesCol
         get() = db.collection("inquiries")
+
+    private val pageVisitsCol
+        get() = db.collection("pageVisits")
+
+    private val visitorStatsDoc
+        get() = db.collection("siteStats").document("visitors")
 
     fun isBootstrapOwner(): Boolean {
         val email = auth.currentUser?.email ?: return false
@@ -256,6 +271,148 @@ class PortalRepository(
         }
     }
 
+    fun observeWebsiteVisitorStats(): Flow<WebsiteVisitorStats> = flow {
+        if (auth.currentUser == null) {
+            emit(WebsiteVisitorStats(isLoaded = true))
+            return@flow
+        }
+        val statsFlow: Flow<DocumentSnapshot?> = visitorStatsDoc
+            .snapshots()
+            .map<DocumentSnapshot, DocumentSnapshot?> { it }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreException(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (firestoreError?.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.GET, "siteStats/visitors")
+                }
+                emit(null)
+            }
+        val visitsFlow: Flow<QuerySnapshot?> = pageVisitsCol
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(2000)
+            .snapshots()
+            .map<QuerySnapshot, QuerySnapshot?> { it }
+            .catch { error ->
+                val firestoreError = unwrapFirestoreException(error)
+                if (firestoreError == null && error is CancellationException) throw error
+                if (firestoreError?.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, "pageVisits")
+                }
+                emit(null)
+            }
+        emitAll(
+            combine(statsFlow, visitsFlow) { statsSnap, visitsSnap ->
+                computeVisitorStats(statsSnap, visitsSnap?.documents.orEmpty())
+            }
+        )
+    }
+
+    suspend fun refreshWebsiteVisitorStats(): Result<WebsiteVisitorStats> {
+        return try {
+            requireSignedIn()
+            val statsSnap = runCatching {
+                visitorStatsDoc.get(Source.SERVER).await()
+            }.getOrNull()
+            val visitDocs = runCatching {
+                pageVisitsCol
+                    .orderBy("createdAt", Query.Direction.DESCENDING)
+                    .limit(2000)
+                    .get(Source.SERVER)
+                    .await()
+                    .documents
+            }.getOrDefault(emptyList())
+            Result.success(computeVisitorStats(statsSnap, visitDocs))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, "siteStats/visitors")
+            Result.failure(friendlyException(e))
+        }
+    }
+
+    private fun computeVisitorStats(
+        statsSnap: DocumentSnapshot?,
+        visitDocs: List<DocumentSnapshot>
+    ): WebsiteVisitorStats {
+        val nowMillis = System.currentTimeMillis()
+        val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMillis))
+        val startOfTodayMillis = Calendar.getInstance().apply {
+            timeInMillis = nowMillis
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val sevenDaysAgoMillis = nowMillis - (7L * 24L * 60L * 60L * 1000L)
+
+        var visitsTodayFromLog = 0L
+        var visits7dFromLog = 0L
+        var latestVisitMillis = 0L
+        val uniqueIds = HashSet<String>()
+        val parsedRecords = ArrayList<PageVisitRecord>(visitDocs.size)
+
+        visitDocs.forEach { doc ->
+            val data = doc.data ?: return@forEach
+            val createdMillis = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                ?.toDate()?.time ?: 0L
+            if (createdMillis > latestVisitMillis) {
+                latestVisitMillis = createdMillis
+            }
+            val docDateKey = (data["dateKey"] as? String).orEmpty().trim()
+            if (docDateKey == todayKey || (createdMillis >= startOfTodayMillis && createdMillis > 0L)) {
+                visitsTodayFromLog += 1L
+            }
+            if (createdMillis >= sevenDaysAgoMillis && createdMillis > 0L) {
+                visits7dFromLog += 1L
+            }
+            val visitorId = (data["visitorId"] as? String).orEmpty().trim()
+            if (visitorId.isNotEmpty()) {
+                uniqueIds.add(visitorId)
+            } else {
+                uniqueIds.add(doc.id)
+            }
+            val rawPage = (data["page"] as? String).orEmpty().trim().ifBlank { "/" }
+            parsedRecords.add(
+                PageVisitRecord(
+                    id = (data["id"] as? String).orEmpty().ifBlank { doc.id },
+                    page = rawPage,
+                    visitorId = visitorId,
+                    dateKey = docDateKey,
+                    createdAtMillis = createdMillis
+                )
+            )
+        }
+
+        val statsData = statsSnap?.takeIf { it.exists() }?.data
+        val counterTotal = (statsData?.get("totalVisits") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
+        val counterUnique = (statsData?.get("uniqueVisitors") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
+        val counterTodayKey = (statsData?.get("todayKey") as? String).orEmpty().trim()
+        val counterToday = if (counterTodayKey.isEmpty() || counterTodayKey == todayKey) {
+            (statsData?.get("todayVisits") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
+        } else {
+            0L
+        }
+        val counterUpdatedMillis = statsSnap?.takeIf { it.exists() }
+            ?.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            ?.toDate()?.time ?: 0L
+
+        val totalVisits = maxOf(counterTotal, visitDocs.size.toLong())
+        val todayVisits = maxOf(counterToday, visitsTodayFromLog).coerceAtMost(totalVisits)
+        val last7Days = maxOf(visits7dFromLog, todayVisits).coerceAtMost(totalVisits)
+        val uniqueVisitors = maxOf(counterUnique, uniqueIds.size.toLong()).coerceAtMost(totalVisits)
+        val lastVisitAt = maxOf(latestVisitMillis, counterUpdatedMillis)
+
+        return WebsiteVisitorStats(
+            totalVisits = totalVisits,
+            todayVisits = todayVisits,
+            last7DaysVisits = last7Days,
+            uniqueVisitors = uniqueVisitors,
+            lastVisitAtMillis = lastVisitAt,
+            recentVisitRecords = parsedRecords,
+            isLoaded = true
+        )
+    }
+
     private fun unwrapFirestoreException(error: Throwable): FirebaseFirestoreException? =
         generateSequence(error) { it.cause }
             .filterIsInstance<FirebaseFirestoreException>()
@@ -324,19 +481,34 @@ private fun DocumentSnapshot.toShowroomConfigSafe(): ShowroomConfig {
     } else defaults.tiktok
 
     val contact = if (cMap != null) {
+        fun firstString(vararg keys: String): String =
+            keys.firstNotNullOfOrNull { (cMap[it] as? String)?.trim()?.takeIf(String::isNotEmpty) }.orEmpty()
+
         ContactConfig(
-            addressLine = (cMap["addressLine"] as? String).orEmpty(),
-            cityCountry = (cMap["cityCountry"] as? String).orEmpty(),
-            hours = (cMap["hours"] as? String).orEmpty(),
-            phone = (cMap["phone"] as? String).orEmpty(),
-            whatsapp = (cMap["whatsapp"] as? String).orEmpty(),
-            telegram = (cMap["telegram"] as? String).orEmpty(),
-            instagram = (cMap["instagram"] as? String).orEmpty(),
-            facebook = (cMap["facebook"] as? String).orEmpty(),
-            x = (cMap["x"] as? String).orEmpty(),
-            email = (cMap["email"] as? String).orEmpty(),
-            mapsUrl = (cMap["mapsUrl"] as? String).orEmpty(),
-            landmarkNote = (cMap["landmarkNote"] as? String).orEmpty()
+            addressLine = firstString("addressLine"),
+            cityCountry = firstString("cityCountry"),
+            hours = firstString("hours"),
+            phone = firstString("phone"),
+            whatsapp = firstString("whatsapp", "whatsApp", "whatsappUrl"),
+            telegram = firstString("telegram", "telegramUrl"),
+            instagram = firstString("instagram", "instagramUrl"),
+            facebook = firstString("facebook", "facebookUrl"),
+            x = firstString("x", "twitter", "twitterUrl", "xUrl"),
+            youtube = firstString("youtube", "youtubeUrl", "youTube"),
+            snapchat = firstString("snapchat", "snapchatUrl", "snapChat"),
+            linkedin = firstString("linkedin", "linkedIn", "linkedinUrl"),
+            pinterest = firstString("pinterest", "pinterestUrl"),
+            threads = firstString("threads", "threadsUrl"),
+            reddit = firstString("reddit", "redditUrl"),
+            viber = firstString("viber", "viberUrl"),
+            imo = firstString("imo", "imoUrl"),
+            wechat = firstString("wechat", "weChat", "wechatId"),
+            discord = firstString("discord", "discordUrl"),
+            twitch = firstString("twitch", "twitchUrl"),
+            website = firstString("website", "websiteUrl", "otherLink"),
+            email = firstString("email"),
+            mapsUrl = firstString("mapsUrl"),
+            landmarkNote = firstString("landmarkNote")
         )
     } else defaults.contact
 

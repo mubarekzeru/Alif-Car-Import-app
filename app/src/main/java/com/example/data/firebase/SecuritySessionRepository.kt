@@ -61,6 +61,9 @@ class SecuritySessionRepository(
     private val _alerts = MutableStateFlow<List<LoginSecurityAlert>>(emptyList())
     val alerts: StateFlow<List<LoginSecurityAlert>> = _alerts.asStateFlow()
 
+    private val _readAlertIds = MutableStateFlow<Set<String>>(emptySet())
+    val readAlertIds: StateFlow<Set<String>> = _readAlertIds.asStateFlow()
+
     private val _currentLoginAtMillis = MutableStateFlow(loadStoredLoginAt())
     val currentLoginAtMillis: StateFlow<Long> = _currentLoginAtMillis.asStateFlow()
 
@@ -140,35 +143,9 @@ class SecuritySessionRepository(
                         parseRemoteSession(doc, mySessionId, isFromCache = isFromCache)
                     }
 
-                    val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
+                    // Keep Active Devices synced without synthesizing false login alerts
+                    // whenever a browser visits the website or refreshes an existing session.
                     mergeRemoteSessions(remoteList, mySessionId)
-
-                    // If another device signed in to the Admin Page and wrote to adminSessions without a matching loginAlerts doc,
-                    // surface a pending LoginSecurityAlert immediately so the admin gets notified and can verify/revoke it.
-                    remoteList
-                        .filter { !it.isCurrentDevice && it.status == AdminDeviceStatus.ACTIVE }
-                        .forEach { remoteSession ->
-                            if (!existingAlertSessionIds.contains(remoteSession.id)) {
-                                val syntheticAlert = LoginSecurityAlert(
-                                    id = buildSyntheticAlertId(remoteSession.id, remoteSession.loginAtMillis),
-                                    sessionId = remoteSession.id,
-                                    email = remoteSession.email,
-                                    deviceName = remoteSession.deviceName,
-                                    platform = remoteSession.platform,
-                                    location = remoteSession.location,
-                                    timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
-                                        ?: remoteSession.lastActiveMillis,
-                                    decision = LoginAlertDecision.PENDING,
-                                    sourcePage = "admin"
-                                )
-                                if (syntheticAlert.isAdminPageEvent &&
-                                    _alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }
-                                ) {
-                                    prependLocalAlert(syntheticAlert)
-                                    activeAlertCallback?.invoke(syntheticAlert)
-                                }
-                            }
-                        }
                 }
 
             remoteAlertsListener = db.collection(COL_LOGIN_ALERTS)
@@ -436,7 +413,6 @@ class SecuritySessionRepository(
             val remoteSessions = sessionsSnapshot.documents.mapNotNull { doc ->
                 parseRemoteSession(doc, mySessionId)
             }
-            val existingAlertSessionIds = _alerts.value.map { it.sessionId }.toSet()
             mergeRemoteSessions(remoteSessions, mySessionId)
 
             val alertsSnapshot = db.collection(COL_LOGIN_ALERTS)
@@ -457,35 +433,10 @@ class SecuritySessionRepository(
             mergeRemoteAlerts(combinedRemoteAlerts)
             _cloudSyncError.value = null
 
-            val knownAlertSessionIds = existingAlertSessionIds + remoteAlerts.map { it.sessionId }
-            remoteSessions
-                .filter { !it.isCurrentDevice && it.status == AdminDeviceStatus.ACTIVE }
-                .forEach { remoteSession ->
-                    if (!knownAlertSessionIds.contains(remoteSession.id)) {
-                        val syntheticAlert = LoginSecurityAlert(
-                            id = buildSyntheticAlertId(remoteSession.id, remoteSession.loginAtMillis),
-                            sessionId = remoteSession.id,
-                            email = remoteSession.email,
-                            deviceName = remoteSession.deviceName,
-                            platform = remoteSession.platform,
-                            location = remoteSession.location,
-                            timestampMillis = remoteSession.loginAtMillis.takeIf { it > 0L }
-                                ?: remoteSession.lastActiveMillis,
-                            decision = LoginAlertDecision.PENDING,
-                            sourcePage = if (remoteSession.isWebsiteSession) "/admin" else "Mobile Admin App"
-                        )
-                        if (syntheticAlert.isAdminPageEvent &&
-                            _alerts.value.none { it.id == syntheticAlert.id || it.sessionId == remoteSession.id }
-                        ) {
-                            prependLocalAlert(syntheticAlert)
-                            activeAlertCallback?.invoke(syntheticAlert)
-                        }
-                    }
-                }
-
             combinedRemoteAlerts
                 .filter {
                     it.isAdminPageEvent &&
+                        !it.isOwnerAuthenticatorVerified &&
                         (it.decision == LoginAlertDecision.PENDING || it.isUnauthorizedAttempt) &&
                         !existingAlertIds.contains(it.id)
                 }
@@ -519,6 +470,7 @@ class SecuritySessionRepository(
             } else alert
         }
         _alerts.value = next
+        markAlertRead(alertId)
         saveLocalPrefs()
     }
 
@@ -533,6 +485,7 @@ class SecuritySessionRepository(
             } else alert
         }
         _alerts.value = nextAlerts
+        markAlertRead(alertId)
 
         val sessionIdToRevoke = targetSessionId
         if (!sessionIdToRevoke.isNullOrBlank()) {
@@ -540,6 +493,22 @@ class SecuritySessionRepository(
         } else {
             saveLocalPrefs()
         }
+    }
+
+    fun markAlertRead(alertId: String) {
+        if (alertId.isBlank()) return
+        val updated = (_readAlertIds.value + alertId).toList().takeLast(MAX_STORED_READ_ALERT_IDS).toSet()
+        _readAlertIds.value = updated
+        prefs.edit().putStringSet(KEY_READ_ALERT_IDS, updated).apply()
+    }
+
+    fun markAllAlertsRead(): List<String> {
+        val allIds = _alerts.value.map { it.id }.filter { it.isNotBlank() }
+        if (allIds.isEmpty()) return emptyList()
+        val updated = (_readAlertIds.value + allIds).toList().takeLast(MAX_STORED_READ_ALERT_IDS).toSet()
+        _readAlertIds.value = updated
+        prefs.edit().putStringSet(KEY_READ_ALERT_IDS, updated).apply()
+        return allIds
     }
 
     fun deactivateOtherSession(
@@ -1220,6 +1189,90 @@ class SecuritySessionRepository(
         }
     }
 
+    suspend fun revokeActiveSessionsForEmail(
+        email: String,
+        sessionId: String = ""
+    ): Result<Int> {
+        val currentUser = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Please sign in again before removing logged-in devices."))
+        val normalizedTargetEmail = email.trim().lowercase(Locale.US)
+        val cleanTargetSessionId = sessionId.trim()
+        if (normalizedTargetEmail.isEmpty() && cleanTargetSessionId.isEmpty()) {
+            return Result.failure(IllegalArgumentException("No account or session identified to remove."))
+        }
+
+        val myId = currentSessionId(currentUser.uid)
+        var revokedCount = 0
+
+        return try {
+            val snapshot = withTimeoutOrNull(6000L) {
+                runCatching {
+                    db.collection(COL_ADMIN_SESSIONS).get(Source.SERVER).await()
+                }.getOrElse {
+                    db.collection(COL_ADMIN_SESSIONS).get().await()
+                }
+            }
+
+            val matchingIds = mutableSetOf<String>()
+            val targetRefs = snapshot?.documents
+                ?.filter { doc ->
+                    val status = (doc.getString("status") ?: "").trim().lowercase(Locale.US)
+                    val devId = doc.getString("deviceId").orEmpty()
+                    val docEmail = (
+                        doc.getString("email")
+                            ?: doc.getString("userEmail")
+                            ?: doc.getString("adminEmail")
+                        ).orEmpty().trim().lowercase(Locale.US)
+                    val isOtherDevice = doc.id != myId && devId != localDeviceId
+                    val matchesTarget = (cleanTargetSessionId.isNotEmpty() && doc.id == cleanTargetSessionId) ||
+                        (normalizedTargetEmail.isNotEmpty() && docEmail == normalizedTargetEmail)
+                    isOtherDevice && matchesTarget && status != AdminDeviceStatus.REVOKED.value
+                }
+                ?.map { doc ->
+                    matchingIds.add(doc.id)
+                    doc.reference
+                }
+                .orEmpty()
+
+            if (targetRefs.isNotEmpty()) {
+                val payload = mapOf(
+                    "status" to AdminDeviceStatus.REVOKED.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                targetRefs.chunked(50).forEach { chunk ->
+                    val batch = db.batch()
+                    chunk.forEach { ref -> batch.update(ref, payload) }
+                    withTimeoutOrNull(6000L) {
+                        batch.commit().await()
+                    }
+                    revokedCount += chunk.size
+                }
+            }
+
+            _sessions.value = _sessions.value.filterNot { session ->
+                !session.isCurrentDevice &&
+                    session.id != myId &&
+                    session.deviceId != localDeviceId &&
+                    (
+                        matchingIds.contains(session.id) ||
+                            (cleanTargetSessionId.isNotEmpty() && session.id == cleanTargetSessionId) ||
+                            (normalizedTargetEmail.isNotEmpty() && session.email.trim().equals(normalizedTargetEmail, ignoreCase = true))
+                        )
+            }
+            saveLocalPrefs()
+            Result.success(revokedCount)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, COL_ADMIN_SESSIONS)
+            Result.failure(
+                IllegalStateException(
+                    e.localizedMessage ?: "Unable to remove logged-in sessions right now."
+                )
+            )
+        }
+    }
+
     private suspend fun mirrorSessionToCloud(uid: String, session: ActiveDeviceSession) {
         sessionWriteMutex.withLock {
             val currentUser = auth.currentUser
@@ -1547,17 +1600,32 @@ class SecuritySessionRepository(
             ?: (data["page"] as? String)
             ?: "admin"
         val attemptType = (data["attemptType"] as? String).orEmpty()
+        val status = (data["status"] as? String).orEmpty()
+        val reason = (data["reason"] as? String).orEmpty().trim()
         val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
-        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, attemptType)) {
+        val email = (data["email"] as? String).orEmpty().trim()
+        val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
+            attemptType.contains("denied", ignoreCase = true) ||
+            attemptType.contains("unauthorized", ignoreCase = true) ||
+            attemptType.contains("incorrect", ignoreCase = true) ||
+            status.equals("failed", ignoreCase = true) ||
+            status.equals("denied", ignoreCase = true) ||
+            status.equals("incorrect", ignoreCase = true)
+        if (!LoginSecurityAlert.isActualLoginAttemptEvent(
+                sourcePage = sourcePage,
+                platform = platform,
+                eventType = attemptType.ifBlank { if (isUnauthorized) "admin_login_attempt" else "admin_login" },
+                status = status,
+                reason = reason,
+                email = email,
+                isFailedAttemptRecord = isUnauthorized
+            )
+        ) {
             return null
         }
         val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
             ?: doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
             ?: System.currentTimeMillis()
-        val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
-            attemptType.contains("denied", ignoreCase = true) ||
-            attemptType.contains("unauthorized", ignoreCase = true)
-        val email = (data["email"] as? String).orEmpty().trim()
         val verifiedByAuth = !isUnauthorized && (
             (data["authenticatorVerified"] as? Boolean == true) ||
                 LoginSecurityAlert.isAuthenticatorVerifiedAttemptType(attemptType)
@@ -1579,16 +1647,33 @@ class SecuritySessionRepository(
             decision = effectiveDecision,
             sourcePage = sourcePage,
             isUnauthorizedAttempt = isUnauthorized,
-            verifiedWithAuthenticator = verifiedByAuth
+            verifiedWithAuthenticator = verifiedByAuth,
+            failureReason = reason,
+            attemptStatus = status
         )
     }
 
     private fun parseRemoteAttemptAsAlert(doc: DocumentSnapshot): LoginSecurityAlert? {
         val data = doc.data ?: return null
         val id = (data["id"] as? String).orEmpty().ifBlank { doc.id }
-        val sourcePage = (data["sourcePage"] as? String).orEmpty().trim()
+        val sourcePage = (data["sourcePage"] as? String)
+            ?: (data["page"] as? String)
+            ?: ""
         val platform = (data["platform"] as? String).orEmpty().trim().ifBlank { "Website Admin" }
-        if (!LoginSecurityAlert.isAdminPageLoginEvent(sourcePage, platform, "admin_login_attempt")) {
+        val status = (data["status"] as? String).orEmpty().trim()
+        val reason = (data["reason"] as? String).orEmpty().trim()
+        val attemptType = (data["attemptType"] as? String).orEmpty().trim()
+        val email = (data["email"] as? String).orEmpty().trim()
+        if (!LoginSecurityAlert.isActualLoginAttemptEvent(
+                sourcePage = sourcePage,
+                platform = platform,
+                eventType = attemptType.ifBlank { "admin_login_attempt" },
+                status = status,
+                reason = reason,
+                email = email,
+                isFailedAttemptRecord = true
+            )
+        ) {
             return null
         }
         val tsMillis = (data["timestampMillis"] as? Number)?.toLong()
@@ -1596,15 +1681,17 @@ class SecuritySessionRepository(
             ?: System.currentTimeMillis()
         return LoginSecurityAlert(
             id = "attempt_$id",
-            sessionId = "",
-            email = (data["email"] as? String).orEmpty().trim(),
+            sessionId = (data["sessionId"] as? String).orEmpty(),
+            email = email,
             deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Unknown Device" },
             platform = platform,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             timestampMillis = tsMillis,
             decision = LoginAlertDecision.REJECTED_NOT_ME,
             sourcePage = sourcePage.ifBlank { "/admin" },
-            isUnauthorizedAttempt = true
+            isUnauthorizedAttempt = true,
+            failureReason = reason,
+            attemptStatus = status
         )
     }
 
@@ -1752,18 +1839,23 @@ class SecuritySessionRepository(
                                     decision = LoginAlertDecision.fromValue(obj.optString("decision")),
                                     sourcePage = obj.optString("sourcePage", "admin"),
                                     isUnauthorizedAttempt = obj.optBoolean("isUnauthorizedAttempt", false),
-                                    verifiedWithAuthenticator = obj.optBoolean("verifiedWithAuthenticator", false)
+                                    verifiedWithAuthenticator = obj.optBoolean("verifiedWithAuthenticator", false),
+                                    failureReason = obj.optString("failureReason", ""),
+                                    attemptStatus = obj.optString("attemptStatus", "")
                                 )
                             )
                         }
                     }
                 }
                 _alerts.value = list
-                    .filter { it.isAdminPageEvent }
+                    .filter { it.isAdminPageEvent && !it.id.startsWith(SYNTHETIC_ALERT_PREFIX) }
                     .sortedByDescending { it.timestampMillis }
                     .take(40)
             }
         }
+
+        val savedReadIds = prefs.getStringSet(KEY_READ_ALERT_IDS, emptySet()).orEmpty()
+        _readAlertIds.value = savedReadIds.toSet()
     }
 
     private fun saveLocalPrefs() {
@@ -1800,6 +1892,8 @@ class SecuritySessionRepository(
                     put("sourcePage", a.sourcePage)
                     put("isUnauthorizedAttempt", a.isUnauthorizedAttempt)
                     put("verifiedWithAuthenticator", a.verifiedWithAuthenticator)
+                    put("failureReason", a.failureReason)
+                    put("attemptStatus", a.attemptStatus)
                 }
             )
         }
@@ -1860,12 +1954,6 @@ class SecuritySessionRepository(
     private fun sanitizeIdPart(raw: String?): String =
         raw.orEmpty().replace(ID_SANITIZE_REGEX, "")
 
-    private fun buildSyntheticAlertId(sessionId: String, loginAtMillis: Long): String {
-        val cleanSession = sanitizeIdPart(sessionId).take(64)
-        val bucket = (loginAtMillis / 60_000L).coerceAtLeast(0L)
-        return "${SYNTHETIC_ALERT_PREFIX}${cleanSession}_$bucket"
-    }
-
     private companion object {
         const val TAG = "SecuritySessionRepo"
         const val PREFS_NAME = "alif_security_prefs"
@@ -1875,6 +1963,8 @@ class SecuritySessionRepository(
         const val KEY_LAST_UID = "last_uid"
         const val KEY_SESSIONS_JSON = "sessions_json"
         const val KEY_ALERTS_JSON = "alerts_json"
+        const val KEY_READ_ALERT_IDS = "read_alert_ids"
+        const val MAX_STORED_READ_ALERT_IDS = 200
 
         const val COL_ADMIN_SESSIONS = "adminSessions"
         const val COL_LOGIN_ALERTS = "loginAlerts"

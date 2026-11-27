@@ -15,21 +15,19 @@ import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.model.AdminAccessConfig
-import com.example.data.model.CustomerInquiry
 import com.example.data.model.LoginSecurityAlert
 
 object SecurityNotificationHelper {
     const val CHANNEL_LOGIN_ALERTS = "admin_login_alerts_live"
-    const val CHANNEL_INQUIRIES = "customer_inquiries_live"
     const val CHANNEL_LIVE_MONITOR = "admin_live_monitor"
 
     const val EXTRA_OPEN_NOTIFICATIONS_TAB = "extra_open_notifications_tab"
     const val EXTRA_GRANT_CANDIDATE_EMAIL = "extra_grant_candidate_email"
+    const val EXTRA_OPEN_REMOVE_OTHER_DEVICES = "extra_open_remove_other_devices"
     const val TAB_LOGIN_ALERTS = "login_alerts"
     const val TAB_INQUIRIES = "inquiries"
 
     private const val PREFS_NAME = "alif_notification_seen_prefs"
-    private const val KEY_SEEN_INQUIRY_IDS = "seen_inquiry_ids"
     private const val KEY_NOTIFIED_ALERT_IDS = "notified_alert_ids"
     private const val KEY_INSTANT_ALERTS_ENABLED = "instant_background_alerts_enabled"
 
@@ -41,6 +39,15 @@ object SecurityNotificationHelper {
     fun setInstantBackgroundAlertsEnabled(context: Context, enabled: Boolean) {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_INSTANT_ALERTS_ENABLED, enabled).apply()
+    }
+
+    fun clearLoginAlertNotifications(context: Context, alertIds: Collection<String>) {
+        val manager = NotificationManagerCompat.from(context.applicationContext)
+        alertIds.forEach { id ->
+            if (id.isNotBlank()) {
+                runCatching { manager.cancel(id.hashCode()) }
+            }
+        }
     }
 
     fun ensureChannels(context: Context) {
@@ -144,21 +151,33 @@ object SecurityNotificationHelper {
         )
 
         val canOfferGrant = alert.isUnauthorizedAttempt && AdminAccessConfig.isValidAdminEmail(alert.email)
+        val isIncorrectCredentials = alert.isUnauthorizedAttempt && (
+            alert.attemptStatus.equals("failed", ignoreCase = true) ||
+                alert.attemptStatus.equals("incorrect", ignoreCase = true) ||
+                alert.attemptStatus.equals("wrong_password", ignoreCase = true) ||
+                alert.failureReason.contains("password", ignoreCase = true) ||
+                alert.failureReason.contains("incorrect", ignoreCase = true) ||
+                alert.failureReason.contains("wrong", ignoreCase = true) ||
+                alert.failureReason.contains("invalid", ignoreCase = true)
+            )
 
         val title = when {
+            isIncorrectCredentials -> "Incorrect Login Attempt (${alert.platform})"
             alert.isUnauthorizedAttempt -> "Blocked Admin Login Attempt (${alert.platform})"
             alert.isOwnerAuthenticatorVerified -> "Verified Admin Sign-In (${alert.platform})"
-            else -> "Admin Page Sign-In (${alert.platform})"
+            else -> "Admin Login Attempt (${alert.platform})"
         }
         val body = when {
+            isIncorrectCredentials && canOfferGrant ->
+                "${alert.email.trim()} entered incorrect credentials • ${alert.deviceName} • ${alert.location}. Tap to manage access or remove from logged in."
             canOfferGrant ->
-                "${alert.email.trim()} was blocked from the Admin Page • ${alert.deviceName} • ${alert.location}. Tap to keep blocked or grant admin access."
+                "${alert.email.trim()} tried to log in • ${alert.deviceName} • ${alert.location}. Tap to keep blocked, remove from logged in, or grant admin access."
             alert.isUnauthorizedAttempt ->
-                "${alert.email.ifBlank { "Unknown account" }} tried to log into the Admin Page • ${alert.deviceName} • ${alert.location}."
+                "${alert.email.ifBlank { "Unknown account" }} tried to log in with incorrect details • ${alert.deviceName} • ${alert.location}."
             alert.isOwnerAuthenticatorVerified ->
                 "${alert.email.trim()} signed in with Google Authenticator • ${alert.deviceName} • ${alert.location}."
             else ->
-                "${alert.email.ifBlank { "Admin" }} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
+                "${alert.email.ifBlank { "Admin" }} signed in • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_LOGIN_ALERTS)
@@ -188,6 +207,19 @@ object SecurityNotificationHelper {
             builder.addAction(0, "Grant Admin Access", grantPendingIntent)
         }
 
+        val removeOtherDevicesIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_NOTIFICATIONS_TAB, TAB_LOGIN_ALERTS)
+            putExtra(EXTRA_OPEN_REMOVE_OTHER_DEVICES, true)
+        }
+        val removeOtherDevicesPendingIntent = PendingIntent.getActivity(
+            context,
+            ("remove_others_${alert.id}").hashCode(),
+            removeOtherDevicesIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        builder.addAction(0, "Remove Other Devices", removeOtherDevicesPendingIntent)
+
         val notification = builder.build()
 
         runCatching {
@@ -196,14 +228,5 @@ object SecurityNotificationHelper {
                 notification
             )
         }
-    }
-
-    /**
-     * Kept as a no-op so public visitor activity on the home dashboard / visitors page
-     * never triggers heads-up notifications (alerts are strictly for Admin Page logins).
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun showNewInquiriesIfNeeded(context: Context, inquiries: List<CustomerInquiry>) {
-        // Intentionally disabled: notifications are shown only for Admin Page login attempts.
     }
 }

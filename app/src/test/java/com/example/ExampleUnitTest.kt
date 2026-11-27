@@ -770,6 +770,143 @@ class ExampleUnitTest {
         val blockedOwnerAttempt = ownerVerifiedAlert.copy(isUnauthorizedAttempt = true)
         assertFalse(blockedOwnerAttempt.isOwnerAuthenticatorVerified)
     }
+
+    @Test
+    fun loginSecurityAlert_separatesWebsiteVisitsFromActualLoginAttempts() {
+        val alertCompanion = com.example.data.model.LoginSecurityAlert.Companion
+
+        // Normalizing full URLs and GitHub Pages prefix
+        assertEquals("/", alertCompanion.normalizePagePath("https://alifcarimport.com/"))
+        assertEquals("/", alertCompanion.normalizePagePath("https://mubarekzeru.github.io/AlifCarImport/"))
+        assertEquals("/vehicles/123", alertCompanion.normalizePagePath("https://alifcarimport.com/vehicles/123?ref=ig"))
+        assertEquals("/admin/login", alertCompanion.normalizePagePath("https://mubarekzeru.github.io/AlifCarImport/#/admin/login"))
+
+        // Public website visits are counted as website traffic and NEVER trigger login alerts
+        assertTrue(alertCompanion.isPublicWebsiteVisitEvent("https://alifcarimport.com/", "Website"))
+        assertTrue(alertCompanion.isPublicWebsiteVisitEvent("https://mubarekzeru.github.io/AlifCarImport/", "Website"))
+        assertTrue(alertCompanion.isPublicWebsiteVisitEvent("/vehicles/byd-leopard-5", "Website"))
+        assertFalse(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "https://alifcarimport.com/",
+                platform = "Website",
+                eventType = "page_view"
+            )
+        )
+        assertFalse(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/inventory",
+                platform = "Website",
+                eventType = "admin_login_attempt",
+                status = "attempt"
+            )
+        )
+
+        // Passive opening/viewing of the admin page without attempting to sign in MUST NOT alert
+        assertFalse(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/admin",
+                platform = "Website Admin",
+                eventType = "admin_login_attempt",
+                status = "attempt",
+                reason = "",
+                email = "",
+                isFailedAttemptRecord = true
+            )
+        )
+        assertFalse(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/admin",
+                platform = "Website Admin",
+                eventType = "opened_admin",
+                status = "visit",
+                reason = "Opened admin page",
+                email = "alifcarimports@gmail.com",
+                isFailedAttemptRecord = true
+            )
+        )
+
+        // Real incorrect/failed login attempt MUST alert
+        assertTrue(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/admin/login",
+                platform = "Website Admin",
+                eventType = "admin_login_attempt",
+                status = "failed",
+                reason = "Incorrect password",
+                email = "alifcarimports@gmail.com",
+                isFailedAttemptRecord = true
+            )
+        )
+        assertTrue(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/admin",
+                platform = "Website Admin",
+                eventType = "admin_login_attempt",
+                status = "denied",
+                reason = "Unauthorized admin email",
+                email = "stranger@example.com",
+                isFailedAttemptRecord = true
+            )
+        )
+
+        // Real successful login attempt MUST alert
+        assertTrue(
+            alertCompanion.isActualLoginAttemptEvent(
+                sourcePage = "/admin/login",
+                platform = "Website Admin",
+                eventType = "admin_login",
+                email = "partner@alifcarimport.com",
+                isFailedAttemptRecord = false
+            )
+        )
+    }
+
+    @Test
+    fun loginSecurityAlert_tracksUnreadStateAndIncorrectCredentialsCleanly() {
+        val pendingLogin = com.example.data.model.LoginSecurityAlert(
+            id = "alert_1",
+            sessionId = "sess_1",
+            email = "partner@alifcarimport.com",
+            deviceName = "Chrome on Windows",
+            platform = "Website",
+            location = "Addis Ababa",
+            timestampMillis = 1_760_000_000_000L,
+            decision = com.example.data.model.LoginAlertDecision.PENDING
+        )
+        val incorrectAttempt = com.example.data.model.LoginSecurityAlert(
+            id = "attempt_2",
+            sessionId = "",
+            email = "alifcarimports@gmail.com",
+            deviceName = "Safari on iPhone",
+            platform = "Website Admin",
+            location = "Addis Ababa",
+            timestampMillis = 1_760_000_050_000L,
+            decision = com.example.data.model.LoginAlertDecision.REJECTED_NOT_ME,
+            isUnauthorizedAttempt = true,
+            failureReason = "Incorrect password",
+            attemptStatus = "failed"
+        )
+        val ownerAuthLogin = pendingLogin.copy(
+            id = "alert_3",
+            email = "alifcarimports@gmail.com",
+            decision = com.example.data.model.LoginAlertDecision.CONFIRMED_ME,
+            verifiedWithAuthenticator = true
+        )
+
+        assertTrue(incorrectAttempt.isIncorrectCredentialsAttempt)
+        assertFalse(pendingLogin.isIncorrectCredentialsAttempt)
+
+        // Before Mark All Read: pending login + incorrect attempt are unread; owner Authenticator login is not unread
+        assertTrue(pendingLogin.isUnread(emptySet()))
+        assertTrue(incorrectAttempt.isUnread(emptySet()))
+        assertFalse(ownerAuthLogin.isUnread(emptySet()))
+
+        // After Mark All Read: all marked IDs become read
+        val markedRead = setOf("alert_1", "attempt_2", "alert_3")
+        assertFalse(pendingLogin.isUnread(markedRead))
+        assertFalse(incorrectAttempt.isUnread(markedRead))
+        assertFalse(ownerAuthLogin.isUnread(markedRead))
+    }
 }
 
 

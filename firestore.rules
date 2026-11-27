@@ -70,7 +70,7 @@ service cloud.firestore {
     }
 
     function isValidTimestamp(val) {
-      return val is timestamp && val <= request.time;
+      return val is timestamp && val <= request.time + duration.value(5, 'm');
     }
 
     function optStr(m, k, maxLen) {
@@ -431,67 +431,98 @@ service cloud.firestore {
     }
 
     function isValidAdminLoginAttempt(attemptId, data) {
-      return data.keys().hasAll([
+      return data.keys().hasOnly([
           'id',
           'email',
           'deviceName',
           'platform',
           'sourcePage',
+          'page',
           'location',
           'status',
-          'timestampMillis',
-          'createdAt'
-        ]) &&
-        data.keys().hasOnly([
-          'id',
-          'email',
-          'deviceName',
-          'platform',
-          'sourcePage',
-          'location',
-          'status',
+          'attemptType',
           'browser',
           'reason',
+          'sessionId',
           'timestampMillis',
           'createdAt'
         ]) &&
-        data.id == attemptId &&
-        isValidId(data.id) &&
-        isValidString(data.email, 0, 254) &&
-        isValidString(data.deviceName, 1, 160) &&
-        isValidString(data.platform, 1, 60) &&
-        isValidString(data.sourcePage, 1, 120) &&
-        data.sourcePage.lower().matches('.*admin.*') &&
-        isValidString(data.location, 0, 160) &&
-        data.status in ['failed', 'denied', 'attempt'] &&
+        (!('id' in data) || data.id == attemptId) &&
+        (!('email' in data) || data.email == null || isValidString(data.email, 0, 254)) &&
+        (!('deviceName' in data) || data.deviceName == null || isValidString(data.deviceName, 0, 160)) &&
+        (!('platform' in data) || data.platform == null || isValidString(data.platform, 0, 60)) &&
+        (!('sourcePage' in data) || data.sourcePage == null || isValidString(data.sourcePage, 0, 200)) &&
+        (!('page' in data) || data.page == null || isValidString(data.page, 0, 200)) &&
+        (!('location' in data) || data.location == null || isValidString(data.location, 0, 160)) &&
+        (!('status' in data) || data.status in ['failed', 'denied', 'attempt', 'incorrect', 'wrong_password', 'blocked', 'unauthorized']) &&
+        (!('attemptType' in data) || data.attemptType == null || isValidString(data.attemptType, 0, 60)) &&
         (!('browser' in data) || data.browser == null || isValidString(data.browser, 0, 80)) &&
         (!('reason' in data) || data.reason == null || isValidString(data.reason, 0, 240)) &&
-        data.timestampMillis is number && data.timestampMillis >= 0 &&
-        isValidTimestamp(data.createdAt);
+        (!('sessionId' in data) || data.sessionId == null || isValidString(data.sessionId, 0, 128)) &&
+        (!('timestampMillis' in data) || (data.timestampMillis is number && data.timestampMillis >= 0)) &&
+        (!('createdAt' in data) || isValidTimestamp(data.createdAt)) &&
+        (('createdAt' in data) || ('timestampMillis' in data));
     }
 
     function isValidPageVisit(visitId, data) {
-      return data.keys().hasAll(['id', 'page', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'page', 'visitorId', 'dateKey', 'referrer', 'userAgent', 'createdAt']) &&
-        data.id == visitId &&
-        isValidId(data.id) &&
-        isValidString(data.page, 1, 120) &&
+      return data.keys().hasOnly([
+          'id',
+          'page',
+          'path',
+          'url',
+          'sourcePage',
+          'visitorId',
+          'sessionId',
+          'deviceId',
+          'dateKey',
+          'referrer',
+          'userAgent',
+          'browser',
+          'deviceName',
+          'platform',
+          'location',
+          'timestampMillis',
+          'timestamp',
+          'visitedAt',
+          'createdAt'
+        ]) &&
+        (!('id' in data) || data.id == visitId) &&
+        (
+          (('page' in data) && isValidString(data.page, 1, 200)) ||
+          (('path' in data) && isValidString(data.path, 1, 200)) ||
+          (('url' in data) && isValidString(data.url, 1, 300))
+        ) &&
+        (!('page' in data) || data.page == null || isValidString(data.page, 0, 200)) &&
+        (!('path' in data) || data.path == null || isValidString(data.path, 0, 200)) &&
+        (!('url' in data) || data.url == null || isValidString(data.url, 0, 300)) &&
+        (!('sourcePage' in data) || data.sourcePage == null || isValidString(data.sourcePage, 0, 200)) &&
         (!('visitorId' in data) || data.visitorId == null || isValidString(data.visitorId, 0, 128)) &&
+        (!('sessionId' in data) || data.sessionId == null || isValidString(data.sessionId, 0, 128)) &&
+        (!('deviceId' in data) || data.deviceId == null || isValidString(data.deviceId, 0, 128)) &&
         (!('dateKey' in data) || data.dateKey == null || isValidString(data.dateKey, 0, 20)) &&
         (!('referrer' in data) || data.referrer == null || isValidString(data.referrer, 0, 300)) &&
         (!('userAgent' in data) || data.userAgent == null || isValidString(data.userAgent, 0, 300)) &&
-        isValidTimestamp(data.createdAt);
+        (!('browser' in data) || data.browser == null || isValidString(data.browser, 0, 80)) &&
+        (!('deviceName' in data) || data.deviceName == null || isValidString(data.deviceName, 0, 160)) &&
+        (!('platform' in data) || data.platform == null || isValidString(data.platform, 0, 60)) &&
+        (!('location' in data) || data.location == null || isValidString(data.location, 0, 160)) &&
+        (!('timestampMillis' in data) || (data.timestampMillis is number && data.timestampMillis >= 0)) &&
+        (!('createdAt' in data) || isValidTimestamp(data.createdAt)) &&
+        (!('timestamp' in data) || isValidTimestamp(data.timestamp)) &&
+        (!('visitedAt' in data) || isValidTimestamp(data.visitedAt)) &&
+        (('createdAt' in data) || ('timestamp' in data) || ('visitedAt' in data) || ('timestampMillis' in data));
     }
 
     function isValidVisitorStatsDoc(data) {
-      return data.keys().hasAll(['totalVisits', 'updatedAt']) &&
-        data.keys().hasOnly(['totalVisits', 'uniqueVisitors', 'todayVisits', 'todayKey', 'lastPage', 'updatedAt']) &&
+      return data.keys().hasAll(['totalVisits']) &&
+        data.keys().hasOnly(['totalVisits', 'uniqueVisitors', 'todayVisits', 'todayKey', 'lastPage', 'lastVisitAt', 'updatedAt']) &&
         data.totalVisits is number && data.totalVisits >= 0 && data.totalVisits <= 1000000000 &&
         (!('uniqueVisitors' in data) || data.uniqueVisitors == null || (data.uniqueVisitors is number && data.uniqueVisitors >= 0 && data.uniqueVisitors <= 1000000000)) &&
         (!('todayVisits' in data) || data.todayVisits == null || (data.todayVisits is number && data.todayVisits >= 0 && data.todayVisits <= 100000000)) &&
         (!('todayKey' in data) || data.todayKey == null || isValidString(data.todayKey, 0, 20)) &&
-        (!('lastPage' in data) || data.lastPage == null || isValidString(data.lastPage, 0, 120)) &&
-        isValidTimestamp(data.updatedAt);
+        (!('lastPage' in data) || data.lastPage == null || isValidString(data.lastPage, 0, 200)) &&
+        (!('lastVisitAt' in data) || data.lastVisitAt == null || isValidTimestamp(data.lastVisitAt)) &&
+        (!('updatedAt' in data) || isValidTimestamp(data.updatedAt));
     }
 
     function isValidVisitorStatsCreate(data) {

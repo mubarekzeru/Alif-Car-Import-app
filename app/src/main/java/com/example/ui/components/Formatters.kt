@@ -6,10 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import android.util.LruCache
-import androidx.annotation.DrawableRes
 import androidx.compose.ui.graphics.Color
-import com.example.R
-import com.example.data.model.StudioPreset
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.theme.AmberReserved
@@ -62,14 +59,6 @@ fun formatEpochMillis(millis: Long): String {
     if (millis <= 0L) return "Just now"
     val formatter = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
     return formatter.format(java.util.Date(millis))
-}
-
-@DrawableRes
-fun StudioPreset.studioDrawableRes(): Int = when (this) {
-    StudioPreset.SEDAN -> R.drawable.img_vehicle_sedan
-    StudioPreset.SUV -> R.drawable.img_vehicle_suv
-    StudioPreset.TRUCK -> R.drawable.img_vehicle_truck
-    StudioPreset.COUPE -> R.drawable.img_vehicle_coupe
 }
 
 private const val WEBSITE_BASE_URL = "https://alifcarimport.com"
@@ -442,9 +431,6 @@ fun Vehicle.allResolvedPhotoUrls(): List<String> = buildList {
     }
 }
 
-fun Vehicle.resolveImageModel(): Any? =
-    allResolvedPhotoUrls().firstNotNullOfOrNull { decodeImageModel(it) }
-
 fun buildAppImageRequest(
     context: Context,
     data: Any,
@@ -480,8 +466,6 @@ fun buildAppImageRequest(
         }
         .build()
 }
-
-private val encodedDrawableCache = java.util.concurrent.ConcurrentHashMap<Int, String>()
 
 fun encodePickedPhotoAsDataUrl(
     context: Context,
@@ -519,26 +503,6 @@ fun encodeGalleryPhotoAsDataUrl(context: Context, uri: Uri): String? =
         maxDimension = 640,
         targetMaxBytes = 55_000
     )
-
-fun encodeDrawableAsDataUrl(context: Context, @DrawableRes resId: Int): String? {
-    encodedDrawableCache[resId]?.let { return it }
-    return try {
-        val opts = BitmapFactory.Options().apply {
-            inSampleSize = 2
-            inPreferredConfig = Bitmap.Config.RGB_565
-        }
-        val bitmap = BitmapFactory.decodeResource(context.resources, resId, opts)
-            ?: BitmapFactory.decodeResource(context.resources, resId)
-            ?: return null
-        compressBitmapToDataUrl(
-            bitmap = bitmap,
-            maxDimension = 640f,
-            targetMaxBytes = 55_000
-        )?.also { encodedDrawableCache[resId] = it }
-    } catch (_: Exception) {
-        null
-    }
-}
 
 private fun calculateInSampleSize(width: Int, height: Int, reqSize: Int): Int {
     if (width <= 0 || height <= 0) return 1

@@ -8,6 +8,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.GppBad
 import androidx.compose.material.icons.filled.LocationOn
@@ -82,7 +85,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.firebase.AdminAccessState
 import com.example.data.firebase.InquiriesState
+import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.AdminAccessConfig
+import com.example.data.model.AuthenticatorStatus
 import com.example.data.model.LoginAlertDecision
 import com.example.data.model.LoginSecurityAlert
 import com.example.ui.notifications.SecurityNotificationHelper
@@ -103,20 +108,29 @@ enum class NotificationCenterTab(val label: String) {
 fun NotificationsScreen(
     activeTab: NotificationCenterTab,
     alerts: List<LoginSecurityAlert>,
+    sessions: List<ActiveDeviceSession> = emptyList(),
+    readAlertIds: Set<String> = emptySet(),
     inquiriesState: InquiriesState,
     adminAccessState: AdminAccessState = AdminAccessState.Loading,
+    authenticatorStatus: AuthenticatorStatus = AuthenticatorStatus(),
     isMutatingAdminAccess: Boolean = false,
+    isSigningOutAll: Boolean = false,
     currentSessionId: String = "",
     currentSessionVerifiedWithAuthenticator: Boolean = false,
     preselectedGrantEmail: String? = null,
     onConsumePreselectedGrantEmail: () -> Unit = {},
+    openRemoveOtherDevicesOnLaunch: Boolean = false,
+    onConsumeOpenRemoveOtherDevices: () -> Unit = {},
     snackbarMessage: String?,
     onConsumeSnackbar: () -> Unit,
     onSelectTab: (NotificationCenterTab) -> Unit,
+    onMarkAllRead: () -> Unit = {},
     onConfirmItWasMe: (String) -> Unit,
     onRejectNotMe: (String) -> Unit,
     onGrantAdminAccess: (String) -> Unit = {},
     onRevokeAdminAccess: (String) -> Unit = {},
+    onRemoveFromLoggedIn: (email: String, sessionId: String) -> Unit = { _, _ -> },
+    onRemoveAllOtherDevices: (totpCode: String, onResult: (Result<Int>) -> Unit) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -136,8 +150,25 @@ fun NotificationsScreen(
             .toSet()
     }
 
+    val unreadCount = remember(alerts, readAlertIds) {
+        alerts.count { it.isUnread(readAlertIds) }
+    }
+    val otherActiveSessions = remember(sessions) {
+        sessions.filterNot { it.isCurrentDevice }
+    }
+    val otherWebsiteSessionsCount = remember(otherActiveSessions) {
+        otherActiveSessions.count { it.isWebsiteSession }
+    }
+    val otherMobileSessionsCount = remember(otherActiveSessions) {
+        otherActiveSessions.count { !it.isWebsiteSession }
+    }
+
     var grantDialogEmail by remember { mutableStateOf<String?>(null) }
     var revokeDialogEmail by remember { mutableStateOf<String?>(null) }
+    var removeSessionDialogTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showRemoveAllOtherDevicesDialog by remember { mutableStateOf(false) }
+    var removeAllTotpInput by remember { mutableStateOf("") }
+    var removeAllDialogError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(preselectedGrantEmail) {
         val candidate = preselectedGrantEmail?.trim()
@@ -146,6 +177,13 @@ fun NotificationsScreen(
                 grantDialogEmail = candidate
             }
             onConsumePreselectedGrantEmail()
+        }
+    }
+
+    LaunchedEffect(openRemoveOtherDevicesOnLaunch) {
+        if (openRemoveOtherDevicesOnLaunch) {
+            showRemoveAllOtherDevicesDialog = true
+            onConsumeOpenRemoveOtherDevices()
         }
     }
 
@@ -185,10 +223,37 @@ fun NotificationsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Admin page login attempts only (not visitor pages)",
+                            text = if (unreadCount > 0) {
+                                "$unreadCount unread • Login attempts only"
+                            } else {
+                                "All read • Login attempts only"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                },
+                actions = {
+                    if (alerts.isNotEmpty()) {
+                        TextButton(
+                            onClick = onMarkAllRead,
+                            enabled = unreadCount > 0,
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("mark_all_alerts_read_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DoneAll,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (unreadCount > 0) "Mark all read" else "All read",
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             )
@@ -262,8 +327,100 @@ fun NotificationsScreen(
                     }
                 }
 
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = "Device Security",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (otherActiveSessions.isNotEmpty()) {
+                                        "${otherActiveSessions.size} other active session(s) ($otherWebsiteSessionsCount website • $otherMobileSessionsCount app)"
+                                    } else {
+                                        "Sign out all other website & app sessions while keeping this device logged in."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (otherActiveSessions.isNotEmpty()) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = CircleShape
+                                ) {
+                                    Text(
+                                        text = "${otherActiveSessions.size} other",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = { showRemoveAllOtherDevicesDialog = true },
+                            enabled = !isSigningOutAll,
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("notifications_remove_all_other_devices_button")
+                        ) {
+                            if (isSigningOutAll) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    color = MaterialTheme.colorScheme.onError,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Removing Other Devices…", fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Devices,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Remove All Other Devices (App & Website)",
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
                 LoginAlertsList(
                     alerts = alerts,
+                    sessions = sessions,
+                    readAlertIds = readAlertIds,
                     authorizedEmails = authorizedEmails,
                     isMutatingAdminAccess = isMutatingAdminAccess,
                     currentSessionId = currentSessionId,
@@ -271,7 +428,10 @@ fun NotificationsScreen(
                     onConfirmItWasMe = onConfirmItWasMe,
                     onRejectNotMe = onRejectNotMe,
                     onRequestGrantAccess = { email -> grantDialogEmail = email },
-                    onRequestRevokeAccess = { email -> revokeDialogEmail = email }
+                    onRequestRevokeAccess = { email -> revokeDialogEmail = email },
+                    onRequestRemoveFromLoggedIn = { email, sessionId ->
+                        removeSessionDialogTarget = email to sessionId
+                    }
                 )
             }
         }
@@ -436,6 +596,172 @@ fun NotificationsScreen(
                     modifier = Modifier
                         .height(48.dp)
                         .testTag("cancel_revoke_admin_access_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    val pendingRemoveSession = removeSessionDialogTarget
+    if (pendingRemoveSession != null) {
+        val (targetEmail, targetSessionId) = pendingRemoveSession
+        val normalizedTarget = targetEmail.trim().lowercase(Locale.US)
+        AlertDialog(
+            onDismissRequest = { if (!isMutatingAdminAccess) removeSessionDialogTarget = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Devices,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = {
+                Text(
+                    text = "Remove from Logged In?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Immediately log out all other active Website and Mobile App sessions for ${normalizedTarget.ifBlank { "this device" }}? This current device will stay signed in.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRemoveFromLoggedIn(normalizedTarget, targetSessionId)
+                        removeSessionDialogTarget = null
+                    },
+                    enabled = !isMutatingAdminAccess,
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("confirm_remove_from_logged_in_button")
+                ) {
+                    Text("Remove from Logged In", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { removeSessionDialogTarget = null },
+                    enabled = !isMutatingAdminAccess,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("cancel_remove_from_logged_in_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showRemoveAllOtherDevicesDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isSigningOutAll) {
+                    showRemoveAllOtherDevicesDialog = false
+                    removeAllTotpInput = ""
+                    removeAllDialogError = null
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Devices,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = {
+                Text(
+                    text = "Remove All Other Devices?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "This immediately signs out all other logged-in devices across both the Website and Mobile Apps while keeping this current device signed in.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (authenticatorStatus.enabled) {
+                        TotpCodeInputField(
+                            value = removeAllTotpInput,
+                            onValueChange = {
+                                removeAllTotpInput = it
+                                removeAllDialogError = null
+                            },
+                            label = "Google Authenticator 6-Digit Code",
+                            enabled = !isSigningOutAll,
+                            isError = removeAllDialogError != null,
+                            testTag = "notifications_remove_all_totp_input"
+                        )
+                    }
+                    removeAllDialogError?.let { errMsg ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = errMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        removeAllDialogError = null
+                        onRemoveAllOtherDevices(removeAllTotpInput) { result ->
+                            result.onSuccess {
+                                showRemoveAllOtherDevicesDialog = false
+                                removeAllTotpInput = ""
+                                removeAllDialogError = null
+                            }.onFailure { err ->
+                                removeAllDialogError = err.localizedMessage
+                                    ?: "Valid 6-digit Google Authenticator code is required."
+                            }
+                        }
+                    },
+                    enabled = !isSigningOutAll,
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("confirm_notifications_remove_all_other_devices_button")
+                ) {
+                    Text(
+                        text = if (isSigningOutAll) "Removing…" else "Remove All Others",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showRemoveAllOtherDevicesDialog = false
+                        removeAllTotpInput = ""
+                        removeAllDialogError = null
+                    },
+                    enabled = !isSigningOutAll,
+                    modifier = Modifier.height(48.dp)
                 ) {
                     Text("Cancel")
                 }
@@ -815,6 +1141,8 @@ fun CustomerInquiriesTabContent(
 @Composable
 private fun LoginAlertsList(
     alerts: List<LoginSecurityAlert>,
+    sessions: List<ActiveDeviceSession>,
+    readAlertIds: Set<String>,
     authorizedEmails: Set<String>,
     isMutatingAdminAccess: Boolean,
     currentSessionId: String,
@@ -822,7 +1150,8 @@ private fun LoginAlertsList(
     onConfirmItWasMe: (String) -> Unit,
     onRejectNotMe: (String) -> Unit,
     onRequestGrantAccess: (String) -> Unit,
-    onRequestRevokeAccess: (String) -> Unit
+    onRequestRevokeAccess: (String) -> Unit,
+    onRequestRemoveFromLoggedIn: (email: String, sessionId: String) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (alerts.isEmpty()) {
@@ -850,7 +1179,7 @@ private fun LoginAlertsList(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Alerts appear here only when someone signs in or attempts to log into the Admin Page. Website visitor traffic is counted silently in Settings.",
+                        text = "Alerts appear here only when someone tries to log in (with correct or incorrect credentials). Website visitors are tracked silently in Settings → Interactions.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -860,10 +1189,18 @@ private fun LoginAlertsList(
             alerts.forEach { alert ->
                 val normalizedEmail = alert.email.trim().lowercase(Locale.US)
                 val isValidCandidateEmail = AdminAccessConfig.isValidAdminEmail(alert.email)
-                val isAlreadyGranted = alert.isUnauthorizedAttempt &&
-                    isValidCandidateEmail &&
-                    normalizedEmail in authorizedEmails
                 val isBootstrapOwner = normalizedEmail == AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL
+                val hasAdminAccess = isValidCandidateEmail && (
+                    isBootstrapOwner || normalizedEmail in authorizedEmails
+                    )
+                val isUnread = alert.isUnread(readAlertIds)
+                val isIncorrectCredentials = alert.isIncorrectCredentialsAttempt
+                val matchingOtherSessionsCount = sessions.count { session ->
+                    !session.isCurrentDevice && (
+                        (alert.sessionId.isNotBlank() && session.id == alert.sessionId) ||
+                            (normalizedEmail.isNotBlank() && session.email.trim().equals(normalizedEmail, ignoreCase = true))
+                        )
+                }
                 val isVerifiedOwnerAuthLogin = alert.isOwnerAuthenticatorVerified || (
                     !alert.isUnauthorizedAttempt &&
                         isBootstrapOwner &&
@@ -873,7 +1210,13 @@ private fun LoginAlertsList(
                     )
 
                 val (badgeLabel, badgeBg, badgeFg) = when {
-                    alert.isUnauthorizedAttempt && isAlreadyGranted ->
+                    isIncorrectCredentials ->
+                        Triple(
+                            "Incorrect Login Attempt",
+                            MaterialTheme.colorScheme.errorContainer,
+                            MaterialTheme.colorScheme.error
+                        )
+                    alert.isUnauthorizedAttempt && hasAdminAccess ->
                         Triple("Admin Access Granted", EmeraldContainer, EmeraldAvailable)
                     alert.isUnauthorizedAttempt ->
                         Triple(
@@ -900,12 +1243,16 @@ private fun LoginAlertsList(
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(
-                        width = 1.dp,
+                        width = if (isUnread) 1.5.dp else 1.dp,
                         color = when {
-                            (alert.isUnauthorizedAttempt && isAlreadyGranted) || isVerifiedOwnerAuthLogin ->
+                            isIncorrectCredentials ->
+                                MaterialTheme.colorScheme.error.copy(alpha = if (isUnread) 0.7f else 0.4f)
+                            (alert.isUnauthorizedAttempt && hasAdminAccess) || isVerifiedOwnerAuthLogin ->
                                 EmeraldAvailable.copy(alpha = 0.45f)
                             alert.isUnauthorizedAttempt ->
-                                MaterialTheme.colorScheme.error.copy(alpha = 0.45f)
+                                MaterialTheme.colorScheme.error.copy(alpha = if (isUnread) 0.7f else 0.4f)
+                            isUnread ->
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
                             else -> MaterialTheme.colorScheme.outline
                         }
                     ),
@@ -923,17 +1270,37 @@ private fun LoginAlertsList(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Surface(
-                                color = badgeBg,
-                                shape = CircleShape
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    text = badgeLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = badgeFg,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                )
+                                if (isUnread) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                color = if (alert.isUnauthorizedAttempt) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.primary
+                                                },
+                                                shape = CircleShape
+                                            )
+                                            .testTag("unread_alert_dot_${alert.id}")
+                                    )
+                                }
+                                Surface(
+                                    color = badgeBg,
+                                    shape = CircleShape
+                                ) {
+                                    Text(
+                                        text = badgeLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = badgeFg,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                             Text(
                                 text = alert.platform,
@@ -949,6 +1316,26 @@ private fun LoginAlertsList(
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold
                             )
+                        }
+
+                        if (alert.failureReason.isNotBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = alert.failureReason,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
 
                         Row(
@@ -1023,43 +1410,75 @@ private fun LoginAlertsList(
 
                         if (alert.isUnauthorizedAttempt && isValidCandidateEmail) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            if (isAlreadyGranted) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        modifier = Modifier.weight(1f),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            if (hasAdminAccess) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            onRequestRemoveFromLoggedIn(normalizedEmail, alert.sessionId)
+                                        },
+                                        enabled = !isMutatingAdminAccess,
+                                        shape = CircleShape,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.error,
+                                            contentColor = MaterialTheme.colorScheme.onError
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .testTag("remove_from_logged_in_${alert.id}")
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.VerifiedUser,
+                                            imageVector = Icons.Default.Devices,
                                             contentDescription = null,
-                                            tint = EmeraldAvailable,
                                             modifier = Modifier.size(18.dp)
                                         )
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "Access granted — this account can now sign in",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Medium,
-                                            color = EmeraldAvailable
+                                            text = if (matchingOtherSessionsCount > 0) {
+                                                "Remove from Logged In ($matchingOtherSessionsCount active)"
+                                            } else {
+                                                "Remove from Logged In"
+                                            },
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
-                                    if (!isBootstrapOwner) {
-                                        TextButton(
-                                            onClick = { onRequestRevokeAccess(normalizedEmail) },
-                                            enabled = !isMutatingAdminAccess,
-                                            modifier = Modifier
-                                                .height(48.dp)
-                                                .testTag("revoke_admin_access_${alert.id}")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Text(
-                                                text = "Revoke",
-                                                color = MaterialTheme.colorScheme.error,
-                                                fontWeight = FontWeight.SemiBold
+                                            Icon(
+                                                imageVector = Icons.Default.VerifiedUser,
+                                                contentDescription = null,
+                                                tint = EmeraldAvailable,
+                                                modifier = Modifier.size(18.dp)
                                             )
+                                            Text(
+                                                text = "Has admin access",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                                color = EmeraldAvailable
+                                            )
+                                        }
+                                        if (!isBootstrapOwner) {
+                                            TextButton(
+                                                onClick = { onRequestRevokeAccess(normalizedEmail) },
+                                                enabled = !isMutatingAdminAccess,
+                                                modifier = Modifier
+                                                    .height(48.dp)
+                                                    .testTag("revoke_admin_access_${alert.id}")
+                                            ) {
+                                                Text(
+                                                    text = "Revoke Access",
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1087,7 +1506,7 @@ private fun LoginAlertsList(
                                         Text("Grant Admin Access", fontWeight = FontWeight.Bold)
                                     }
                                     Text(
-                                        text = "Blocked from Admin Page. Leave as-is to keep blocked, or tap above to allow this email as an admin.",
+                                        text = "No admin access yet. Leave blocked, or tap above to allow this email to log in.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

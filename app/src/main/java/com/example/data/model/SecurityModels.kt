@@ -147,13 +147,19 @@ data class LoginSecurityAlert(
     val decision: LoginAlertDecision = LoginAlertDecision.PENDING,
     val sourcePage: String = "admin",
     val isUnauthorizedAttempt: Boolean = false,
-    val verifiedWithAuthenticator: Boolean = false
+    val verifiedWithAuthenticator: Boolean = false,
+    val failureReason: String = "",
+    val attemptStatus: String = ""
 ) {
     val isAdminPageEvent: Boolean
-        get() = isAdminPageLoginEvent(
+        get() = isActualLoginAttemptEvent(
             sourcePage = sourcePage,
             platform = platform,
-            eventType = if (isUnauthorizedAttempt) "admin_login_attempt" else "admin_login"
+            eventType = if (isUnauthorizedAttempt) "admin_login_attempt" else "admin_login",
+            status = attemptStatus,
+            reason = failureReason,
+            email = email,
+            isFailedAttemptRecord = isUnauthorizedAttempt
         )
 
     val isOwnerAuthenticatorVerified: Boolean
@@ -162,6 +168,23 @@ data class LoginSecurityAlert(
             verifiedWithAuthenticator = verifiedWithAuthenticator,
             isUnauthorizedAttempt = isUnauthorizedAttempt
         )
+
+    val isIncorrectCredentialsAttempt: Boolean
+        get() = isUnauthorizedAttempt && (
+            attemptStatus.equals("failed", ignoreCase = true) ||
+                attemptStatus.equals("incorrect", ignoreCase = true) ||
+                attemptStatus.equals("wrong_password", ignoreCase = true) ||
+                failureReason.contains("password", ignoreCase = true) ||
+                failureReason.contains("incorrect", ignoreCase = true) ||
+                failureReason.contains("wrong", ignoreCase = true) ||
+                failureReason.contains("invalid", ignoreCase = true)
+            )
+
+    fun isUnread(readAlertIds: Set<String>): Boolean {
+        if (id in readAlertIds) return false
+        if (isOwnerAuthenticatorVerified) return false
+        return isUnauthorizedAttempt || decision == LoginAlertDecision.PENDING
+    }
 
     companion object {
         const val ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED = "authenticator_verified"
@@ -183,6 +206,7 @@ data class LoginSecurityAlert(
             if (isUnauthorizedAttempt || !verifiedWithAuthenticator) return false
             return email.orEmpty().trim().equals(AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL, ignoreCase = true)
         }
+
         private val NON_ADMIN_PAGE_TOKENS = listOf(
             "visitor",
             "visitors",
@@ -195,7 +219,56 @@ data class LoginSecurityAlert(
             "page_view",
             "pageview",
             "website_visit",
-            "site_visit"
+            "site_visit",
+            "page_visit",
+            "pagevisit",
+            "page_open",
+            "page_load",
+            "site_open",
+            "browse",
+            "browsing",
+            "heartbeat",
+            "session_resume",
+            "tab_focus",
+            "opened_admin",
+            "admin_visit",
+            "viewed_admin"
+        )
+
+        private val PASSIVE_VISIT_REASON_TOKENS = listOf(
+            "visited website",
+            "visited the website",
+            "website visit",
+            "page visit",
+            "page view",
+            "visited admin page",
+            "opened admin page",
+            "viewed admin page",
+            "loaded admin page",
+            "browsing",
+            "heartbeat"
+        )
+
+        private val FAILURE_OR_LOGIN_REASON_TOKENS = listOf(
+            "wrong",
+            "incorrect",
+            "invalid",
+            "failed",
+            "denied",
+            "unauthorized",
+            "blocked",
+            "password",
+            "credential",
+            "sign in",
+            "sign-in",
+            "signin",
+            "log in",
+            "log-in",
+            "login",
+            "auth",
+            "not approved",
+            "not allowed",
+            "rejected"
         )
 
         private val NON_ADMIN_EXACT_PAGES = setOf(
@@ -204,6 +277,8 @@ data class LoginSecurityAlert(
             "/home",
             "index",
             "/index",
+            "index.html",
+            "/index.html",
             "dashboard",
             "/dashboard",
             "visitors",
@@ -217,37 +292,176 @@ data class LoginSecurityAlert(
             "cars",
             "/cars",
             "vehicles",
-            "/vehicles"
+            "/vehicles",
+            "tiktok",
+            "/tiktok",
+            "videos",
+            "/videos",
+            "contact",
+            "/contact",
+            "about",
+            "/about",
+            "location",
+            "/location",
+            "showroom",
+            "/showroom",
+            "alifcarimport",
+            "/alifcarimport"
         )
+
+        private val PUBLIC_PATH_PREFIXES = listOf(
+            "/inventory/",
+            "/cars/",
+            "/vehicles/",
+            "/vehicle/",
+            "/car/",
+            "/tiktok/",
+            "/videos/",
+            "/contact/",
+            "/about/",
+            "/showroom/",
+            "/visitors/",
+            "/visitor/"
+        )
+
+        fun normalizePagePath(rawPage: String?): String {
+            var cleaned = rawPage.orEmpty().trim().lowercase()
+            if (cleaned.isEmpty()) return ""
+            // Strip scheme + host if a full URL was logged (e.g. https://mubarekzeru.github.io/AlifCarImport/)
+            if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+                val afterScheme = cleaned.substringAfter("://")
+                cleaned = if (afterScheme.contains('/')) {
+                    "/" + afterScheme.substringAfter('/')
+                } else {
+                    "/"
+                }
+            }
+            // Strip query string and hash unless hash itself carries a SPA route like #/admin
+            val hashPart = cleaned.substringAfter('#', "")
+            cleaned = cleaned.substringBefore('#').substringBefore('?')
+            if (hashPart.startsWith("/")) {
+                cleaned = hashPart.substringBefore('?')
+            }
+            // Strip GitHub Pages base path prefix if present
+            if (cleaned == "/alifcarimport" || cleaned == "/alifcarimport/") {
+                return "/"
+            }
+            if (cleaned.startsWith("/alifcarimport/")) {
+                cleaned = "/" + cleaned.removePrefix("/alifcarimport/")
+            }
+            return cleaned.trimEnd('/').ifEmpty { "/" }
+        }
+
+        fun isPublicWebsiteVisitEvent(
+            sourcePage: String?,
+            platform: String? = null,
+            eventType: String? = null,
+            status: String? = null,
+            reason: String? = null
+        ): Boolean {
+            val typeClean = eventType.orEmpty().trim().lowercase()
+            val platformClean = platform.orEmpty().trim().lowercase()
+            val statusClean = status.orEmpty().trim().lowercase()
+            val reasonClean = reason.orEmpty().trim().lowercase()
+            val normalizedPath = normalizePagePath(sourcePage)
+
+            if (typeClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { typeClean.contains(it) }) {
+                return true
+            }
+            if (platformClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { platformClean.contains(it) }) {
+                return true
+            }
+            if (statusClean == "visit" || statusClean == "view" || statusClean == "page_view" || statusClean == "opened") {
+                return true
+            }
+            if (reasonClean.isNotEmpty() && PASSIVE_VISIT_REASON_TOKENS.any { reasonClean.contains(it) }) {
+                return true
+            }
+            if (normalizedPath.isNotEmpty()) {
+                if (normalizedPath.contains("admin") || normalizedPath.contains("login") || normalizedPath.contains("signin") || normalizedPath.contains("auth")) {
+                    return false
+                }
+                if (NON_ADMIN_EXACT_PAGES.contains(normalizedPath)) return true
+                if (PUBLIC_PATH_PREFIXES.any { normalizedPath.startsWith(it) }) return true
+                if (NON_ADMIN_PAGE_TOKENS.any { normalizedPath.contains(it) }) return true
+            }
+            return false
+        }
 
         fun isAdminPageLoginEvent(
             sourcePage: String?,
             platform: String? = null,
             eventType: String? = null
         ): Boolean {
-            val pageClean = sourcePage.orEmpty().trim().lowercase()
-            val typeClean = eventType.orEmpty().trim().lowercase()
-            val platformClean = platform.orEmpty().trim().lowercase()
+            if (isPublicWebsiteVisitEvent(sourcePage, platform, eventType)) {
+                return false
+            }
+            val normalizedPath = normalizePagePath(sourcePage)
+            val rawClean = sourcePage.orEmpty().trim().lowercase()
+            if (rawClean.isNotEmpty()) {
+                if (normalizedPath.contains("admin") ||
+                    normalizedPath.contains("login") ||
+                    normalizedPath.contains("signin") ||
+                    normalizedPath.contains("auth") ||
+                    rawClean.contains("admin")
+                ) {
+                    return true
+                }
+                // Any non-empty page path that is NOT an admin/login route (e.g. "/gallery", "/pricing")
+                // is a public website page and must NOT trigger a login alert.
+                return false
+            }
+            return true
+        }
 
-            if (typeClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { typeClean.contains(it) }) {
+        /**
+         * Returns true strictly when an event represents an actual login attempt
+         * (either successful sign-in with correct credentials, OR failed/incorrect/blocked sign-in attempt)
+         * and NOT merely visiting the public website or opening/viewing the admin page.
+         */
+        fun isActualLoginAttemptEvent(
+            sourcePage: String?,
+            platform: String? = null,
+            eventType: String? = null,
+            status: String? = null,
+            reason: String? = null,
+            email: String? = null,
+            isFailedAttemptRecord: Boolean = false
+        ): Boolean {
+            if (isPublicWebsiteVisitEvent(sourcePage, platform, eventType, status, reason)) {
                 return false
             }
-            if (platformClean.isNotEmpty() && NON_ADMIN_PAGE_TOKENS.any { platformClean.contains(it) }) {
+            if (!isAdminPageLoginEvent(sourcePage, platform, eventType)) {
                 return false
             }
-            if (pageClean.isNotEmpty()) {
-                if (pageClean.contains("admin")) return true
-                if (NON_ADMIN_EXACT_PAGES.contains(pageClean)) return false
-                if (NON_ADMIN_PAGE_TOKENS.any { pageClean.contains(it) }) return false
+            val statusClean = status.orEmpty().trim().lowercase()
+            val reasonClean = reason.orEmpty().trim().lowercase()
+            val emailClean = email.orEmpty().trim()
+
+            // For failed/unauthorized attempt docs in adminLoginAttempts:
+            // Ignore passive page-load "attempt" logs that have no submitted email and no failed credential reason.
+            if (isFailedAttemptRecord) {
+                val explicitFailureStatus = statusClean in setOf(
+                    "failed",
+                    "denied",
+                    "incorrect",
+                    "wrong_password",
+                    "blocked",
+                    "unauthorized"
+                )
+                val hasFailureReason = reasonClean.isNotEmpty() &&
+                    FAILURE_OR_LOGIN_REASON_TOKENS.any { reasonClean.contains(it) }
+                if (statusClean == "attempt" && emailClean.isEmpty() && !hasFailureReason) {
+                    return false
+                }
+                if (emailClean.isEmpty() && !explicitFailureStatus && !hasFailureReason) {
+                    return false
+                }
             }
             return true
         }
     }
 }
-
-data class PasswordChangeOutcome(
-    val message: String
-)
 
 data class AuthenticatorStatus(
     val enabled: Boolean = false,

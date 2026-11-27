@@ -230,7 +230,8 @@ fun DashboardScreen(
         }
     }
 
-    val pendingAlertsCount = portalViewModel.pendingAlertsCount(loginAlerts)
+    val readAlertIds by portalViewModel.readAlertIds.collectAsStateWithLifecycle()
+    val pendingAlertsCount = portalViewModel.unreadAlertsCount(loginAlerts, readAlertIds)
     val inquiryCount = (inquiriesState as? InquiriesState.Success)?.inquiries?.size ?: 0
     val allVehicles = (uiState as? InventoryUiState.Success)?.allVehicles.orEmpty()
 

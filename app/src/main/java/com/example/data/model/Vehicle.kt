@@ -20,13 +20,6 @@ enum class VehicleStatus(val value: String, val label: String) {
     }
 }
 
-enum class StudioPreset(val label: String) {
-    SUV("SUV"),
-    SEDAN("Sedan"),
-    TRUCK("Truck"),
-    COUPE("Coupe")
-}
-
 data class Vehicle(
     val id: String = "",
     val title: String = "",

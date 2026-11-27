@@ -78,12 +78,6 @@ class InventoryViewModel(
     private val _selectedVehicleId = MutableStateFlow<String?>(null)
     val selectedVehicleId: StateFlow<String?> = _selectedVehicleId.asStateFlow()
 
-    private val _priceEditVehicle = MutableStateFlow<Vehicle?>(null)
-    val priceEditVehicle: StateFlow<Vehicle?> = _priceEditVehicle.asStateFlow()
-
-    private val _formSheetState = MutableStateFlow<FormSheetMode?>(null)
-    val formSheetState: StateFlow<FormSheetMode?> = _formSheetState.asStateFlow()
-
     private val _deleteCandidate = MutableStateFlow<Vehicle?>(null)
     val deleteCandidate: StateFlow<Vehicle?> = _deleteCandidate.asStateFlow()
 
@@ -139,26 +133,6 @@ class InventoryViewModel(
         _selectedVehicleId.value = vehicleId
     }
 
-    fun openQuickPriceEdit(vehicle: Vehicle) {
-        _priceEditVehicle.value = vehicle
-    }
-
-    fun dismissQuickPriceEdit() {
-        _priceEditVehicle.value = null
-    }
-
-    fun openAddVehicleSheet() {
-        _formSheetState.value = FormSheetMode.Add
-    }
-
-    fun openEditVehicleSheet(vehicle: Vehicle) {
-        _formSheetState.value = FormSheetMode.Edit(vehicle)
-    }
-
-    fun dismissFormSheet() {
-        _formSheetState.value = null
-    }
-
     fun requestDeleteVehicle(vehicle: Vehicle) {
         _deleteCandidate.value = vehicle
     }
@@ -178,7 +152,6 @@ class InventoryViewModel(
             val result = repository.updateVehiclePrice(vehicle.id, newPrice)
             _isMutating.value = false
             result.onSuccess {
-                _priceEditVehicle.value = null
                 _snackbarMessage.value = "Updated ${vehicle.displayTitle} price"
                 onSuccess()
             }.onFailure { err ->
@@ -246,7 +219,6 @@ class InventoryViewModel(
 
             if (fastResult != null) {
                 fastResult.onSuccess {
-                    _formSheetState.value = null
                     _snackbarMessage.value = if (editingVehicleId == null) {
                         "Published $summaryName"
                     } else {
@@ -257,7 +229,6 @@ class InventoryViewModel(
                     _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
                 }
             } else {
-                _formSheetState.value = null
                 _snackbarMessage.value = if (editingVehicleId == null) {
                     "Posted $summaryName — syncing to website"
                 } else {
@@ -354,9 +325,4 @@ class InventoryViewModel(
         const val STOP_TIMEOUT_MILLIS = 5000L
         const val FAST_PUBLISH_GRACE_MILLIS = 600L
     }
-}
-
-sealed interface FormSheetMode {
-    data object Add : FormSheetMode
-    data class Edit(val vehicle: Vehicle) : FormSheetMode
 }

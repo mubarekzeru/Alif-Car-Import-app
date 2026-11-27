@@ -36,19 +36,6 @@ enum class DashboardSection(val label: String) {
     TIKTOK_VIDEOS("TikTok Videos")
 }
 
-enum class ActivePortalSheet {
-    NONE,
-    SETTINGS,
-    NOTIFICATIONS,
-    SHOWROOM,
-    ADMIN_ACCESS
-}
-
-sealed interface TikTokFormMode {
-    data object Add : TikTokFormMode
-    data class Edit(val post: TikTokPost) : TikTokFormMode
-}
-
 class PortalViewModel(
     private val appContext: Context,
     private val repository: PortalRepository,
@@ -61,14 +48,8 @@ class PortalViewModel(
     private val _dashboardSection = MutableStateFlow(DashboardSection.INVENTORY)
     val dashboardSection: StateFlow<DashboardSection> = _dashboardSection.asStateFlow()
 
-    private val _activeSheet = MutableStateFlow(ActivePortalSheet.NONE)
-    val activeSheet: StateFlow<ActivePortalSheet> = _activeSheet.asStateFlow()
-
     private val _notificationTab = MutableStateFlow(NotificationCenterTab.LOGIN_ALERTS)
     val notificationTab: StateFlow<NotificationCenterTab> = _notificationTab.asStateFlow()
-
-    private val _tikTokFormMode = MutableStateFlow<TikTokFormMode?>(null)
-    val tikTokFormMode: StateFlow<TikTokFormMode?> = _tikTokFormMode.asStateFlow()
 
     private val _deleteTikTokCandidate = MutableStateFlow<TikTokPost?>(null)
     val deleteTikTokCandidate: StateFlow<TikTokPost?> = _deleteTikTokCandidate.asStateFlow()
@@ -98,6 +79,7 @@ class PortalViewModel(
 
     val sessions: StateFlow<List<ActiveDeviceSession>> = securityRepository.sessions
     val loginAlerts: StateFlow<List<LoginSecurityAlert>> = securityRepository.alerts
+    val readAlertIds: StateFlow<Set<String>> = securityRepository.readAlertIds
     val currentLoginAtMillis: StateFlow<Long> = securityRepository.currentLoginAtMillis
     val isCurrentSessionRevoked: StateFlow<Boolean> = securityRepository.isCurrentSessionRevoked
     val securitySyncError: StateFlow<String?> = securityRepository.cloudSyncError
@@ -232,33 +214,8 @@ class PortalViewModel(
         _dashboardSection.value = section
     }
 
-    fun openSheet(sheet: ActivePortalSheet) {
-        _activeSheet.value = sheet
-    }
-
-    fun openNotifications(tab: NotificationCenterTab = _notificationTab.value) {
-        _notificationTab.value = tab
-        _activeSheet.value = ActivePortalSheet.NOTIFICATIONS
-    }
-
     fun selectNotificationTab(tab: NotificationCenterTab) {
         _notificationTab.value = tab
-    }
-
-    fun dismissSheet() {
-        _activeSheet.value = ActivePortalSheet.NONE
-    }
-
-    fun openAddTikTokForm() {
-        _tikTokFormMode.value = TikTokFormMode.Add
-    }
-
-    fun openEditTikTokForm(post: TikTokPost) {
-        _tikTokFormMode.value = TikTokFormMode.Edit(post)
-    }
-
-    fun dismissTikTokForm() {
-        _tikTokFormMode.value = null
     }
 
     fun requestDeleteTikTokPost(post: TikTokPost) {
@@ -277,6 +234,14 @@ class PortalViewModel(
     fun rejectLoginAlertNotMe(alertId: String) {
         securityRepository.rejectAlertNotMe(alertId)
         _snackbarMessage.value = "Unrecognized session logged out immediately"
+    }
+
+    fun markAllLoginAlertsRead() {
+        val markedIds = securityRepository.markAllAlertsRead()
+        if (markedIds.isNotEmpty()) {
+            SecurityNotificationHelper.clearLoginAlertNotifications(appContext, markedIds)
+            _snackbarMessage.value = "All login alerts marked as read"
+        }
     }
 
     fun deactivateOtherDevice(
@@ -384,9 +349,9 @@ class PortalViewModel(
             val result = securityRepository.revokeAllOtherActiveSessions(totpCode = totpCode)
             result.onSuccess { count ->
                 _snackbarMessage.value = if (count > 0) {
-                    "Removed $count other active device(s). This phone stays signed in."
+                    "Removed $count other logged-in device(s) across app & website. This device stays signed in."
                 } else {
-                    "All other devices removed. This phone stays signed in."
+                    "All other logged-in devices (app & website) removed. This device stays signed in."
                 }
             }
             result
@@ -406,7 +371,6 @@ class PortalViewModel(
             val result = repository.saveShowroomConfig(config)
             _isMutating.value = false
             result.onSuccess {
-                _activeSheet.value = ActivePortalSheet.NONE
                 _snackbarMessage.value = "Contact, social media & location synced to website"
                 onSuccess()
             }.onFailure { err ->
@@ -448,7 +412,6 @@ class PortalViewModel(
             }
             _isMutating.value = false
             result.onSuccess {
-                _tikTokFormMode.value = null
                 _snackbarMessage.value = if (editingPostId == null) {
                     "Published TikTok video link to website"
                 } else {
@@ -532,12 +495,36 @@ class PortalViewModel(
         }
     }
 
-    fun pendingAlertsCount(alerts: List<LoginSecurityAlert>): Int =
-        alerts.count {
-            !it.isUnauthorizedAttempt &&
-                !it.isOwnerAuthenticatorVerified &&
-                it.decision == LoginAlertDecision.PENDING
+    fun removeUserFromLoggedIn(email: String, sessionId: String = "", onSuccess: () -> Unit = {}) {
+        if (_isMutating.value) return
+        val normalized = email.trim().lowercase(java.util.Locale.US)
+        viewModelScope.launch {
+            _isMutating.value = true
+            val result = securityRepository.revokeActiveSessionsForEmail(
+                email = normalized,
+                sessionId = sessionId
+            )
+            _isMutating.value = false
+            result.onSuccess { count ->
+                _snackbarMessage.value = if (count > 0) {
+                    "Removed $count active logged-in session(s) for ${normalized.ifBlank { "this device" }}"
+                } else {
+                    "No other active logged-in sessions found for ${normalized.ifBlank { "this account" }}"
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to remove logged-in session"
+            }
         }
+    }
+
+    fun unreadAlertsCount(
+        alerts: List<LoginSecurityAlert>,
+        readIds: Set<String> = readAlertIds.value
+    ): Int = alerts.count { it.isUnread(readIds) }
+
+    fun pendingAlertsCount(alerts: List<LoginSecurityAlert>): Int =
+        unreadAlertsCount(alerts, readAlertIds.value)
 
     private companion object {
         const val TAG = "PortalVM"

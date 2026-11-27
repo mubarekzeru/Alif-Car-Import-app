@@ -351,22 +351,39 @@ class PortalRepository(
                 }
                 emit(null)
             }
-        val visitsFlow: Flow<QuerySnapshot?> = pageVisitsCol
-            .orderBy("createdAt", Query.Direction.DESCENDING)
+        val visitsFlow: Flow<List<DocumentSnapshot>> = pageVisitsCol
             .limit(2000)
             .snapshots()
-            .map<QuerySnapshot, QuerySnapshot?> { it }
+            .map { it.documents }
             .catch { error ->
                 val firestoreError = unwrapFirestoreException(error)
                 if (firestoreError == null && error is CancellationException) throw error
                 if (firestoreError?.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) {
                     handleFirestoreError(firestoreError ?: error, OperationType.LIST, "pageVisits")
                 }
-                emit(null)
+                emit(emptyList())
+            }
+        // Also silently recover any public website visits that were mistakenly written
+        // to loginAlerts or adminLoginAttempts by older website builds so they count in Interactions.
+        val misroutedAlertsFlow: Flow<List<DocumentSnapshot>> = db.collection("loginAlerts")
+            .limit(300)
+            .snapshots()
+            .map { snap -> snap.documents.filter { isPublicVisitFallbackDoc(it) } }
+            .catch { error ->
+                if (unwrapFirestoreException(error) == null && error is CancellationException) throw error
+                emit(emptyList())
+            }
+        val misroutedAttemptsFlow: Flow<List<DocumentSnapshot>> = db.collection("adminLoginAttempts")
+            .limit(300)
+            .snapshots()
+            .map { snap -> snap.documents.filter { isPublicVisitFallbackDoc(it) } }
+            .catch { error ->
+                if (unwrapFirestoreException(error) == null && error is CancellationException) throw error
+                emit(emptyList())
             }
         emitAll(
-            combine(statsFlow, visitsFlow) { statsSnap, visitsSnap ->
-                computeVisitorStats(statsSnap, visitsSnap?.documents.orEmpty())
+            combine(statsFlow, visitsFlow, misroutedAlertsFlow, misroutedAttemptsFlow) { statsSnap, visitDocs, misroutedAlerts, misroutedAttempts ->
+                computeVisitorStats(statsSnap, visitDocs + misroutedAlerts + misroutedAttempts)
             }
         )
     }
@@ -379,19 +396,76 @@ class PortalRepository(
             }.getOrNull()
             val visitDocs = runCatching {
                 pageVisitsCol
-                    .orderBy("createdAt", Query.Direction.DESCENDING)
                     .limit(2000)
                     .get(Source.SERVER)
                     .await()
                     .documents
             }.getOrDefault(emptyList())
-            Result.success(computeVisitorStats(statsSnap, visitDocs))
+            val misroutedAlerts = runCatching {
+                db.collection("loginAlerts")
+                    .limit(300)
+                    .get(Source.SERVER)
+                    .await()
+                    .documents
+                    .filter { isPublicVisitFallbackDoc(it) }
+            }.getOrDefault(emptyList())
+            val misroutedAttempts = runCatching {
+                db.collection("adminLoginAttempts")
+                    .limit(300)
+                    .get(Source.SERVER)
+                    .await()
+                    .documents
+                    .filter { isPublicVisitFallbackDoc(it) }
+            }.getOrDefault(emptyList())
+            Result.success(computeVisitorStats(statsSnap, visitDocs + misroutedAlerts + misroutedAttempts))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.GET, "siteStats/visitors")
             Result.failure(friendlyException(e))
         }
+    }
+
+    private fun isPublicVisitFallbackDoc(doc: DocumentSnapshot): Boolean {
+        val data = doc.data ?: return false
+        val sourcePage = (data["sourcePage"] as? String)
+            ?: (data["page"] as? String)
+            ?: (data["path"] as? String)
+            ?: (data["url"] as? String)
+            ?: ""
+        val platform = (data["platform"] as? String).orEmpty()
+        val eventType = (data["attemptType"] as? String).orEmpty()
+        val status = (data["status"] as? String).orEmpty()
+        val reason = (data["reason"] as? String).orEmpty()
+        return com.example.data.model.LoginSecurityAlert.isPublicWebsiteVisitEvent(
+            sourcePage = sourcePage,
+            platform = platform,
+            eventType = eventType,
+            status = status,
+            reason = reason
+        )
+    }
+
+    private fun extractVisitTimestampMillis(doc: DocumentSnapshot): Long {
+        val data = doc.data ?: return 0L
+        val fromTs = listOf("createdAt", "timestamp", "visitedAt", "updatedAt")
+            .firstNotNullOfOrNull { field ->
+                runCatching {
+                    doc.getTimestamp(field, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+                }.getOrNull()
+            }
+        if (fromTs != null && fromTs > 0L) return fromTs
+        val fromMillis = (data["timestampMillis"] as? Number)?.toLong()
+            ?: (data["createdAtMillis"] as? Number)?.toLong()
+            ?: (data["visitedAtMillis"] as? Number)?.toLong()
+        if (fromMillis != null && fromMillis > 0L) return fromMillis
+        val dateKey = (data["dateKey"] as? String).orEmpty().trim()
+        if (dateKey.length == 10) {
+            runCatching {
+                SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(dateKey)?.time
+            }.getOrNull()?.let { if (it > 0L) return it }
+        }
+        return 0L
     }
 
     private fun computeVisitorStats(
@@ -413,12 +487,14 @@ class PortalRepository(
         var visits7dFromLog = 0L
         var latestVisitMillis = 0L
         val uniqueIds = HashSet<String>()
+        val seenDocKeys = HashSet<String>()
         val parsedRecords = ArrayList<PageVisitRecord>(visitDocs.size)
 
         visitDocs.forEach { doc ->
             val data = doc.data ?: return@forEach
-            val createdMillis = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                ?.toDate()?.time ?: 0L
+            val dedupKey = "${doc.reference.path}"
+            if (!seenDocKeys.add(dedupKey)) return@forEach
+            val createdMillis = extractVisitTimestampMillis(doc)
             if (createdMillis > latestVisitMillis) {
                 latestVisitMillis = createdMillis
             }
@@ -430,16 +506,23 @@ class PortalRepository(
                 visits7dFromLog += 1L
             }
             val visitorId = (data["visitorId"] as? String).orEmpty().trim()
+                .ifBlank { (data["deviceId"] as? String).orEmpty().trim() }
+                .ifBlank { (data["sessionId"] as? String).orEmpty().trim() }
             if (visitorId.isNotEmpty()) {
                 uniqueIds.add(visitorId)
             } else {
                 uniqueIds.add(doc.id)
             }
-            val rawPage = (data["page"] as? String).orEmpty().trim().ifBlank { "/" }
+            val rawPage = (data["page"] as? String).orEmpty().trim()
+                .ifBlank { (data["path"] as? String).orEmpty().trim() }
+                .ifBlank { (data["sourcePage"] as? String).orEmpty().trim() }
+                .ifBlank { (data["url"] as? String).orEmpty().trim() }
+                .ifBlank { "/" }
+            val normalizedPage = com.example.data.model.LoginSecurityAlert.normalizePagePath(rawPage).ifBlank { "/" }
             parsedRecords.add(
                 PageVisitRecord(
                     id = (data["id"] as? String).orEmpty().ifBlank { doc.id },
-                    page = rawPage,
+                    page = normalizedPage,
                     visitorId = visitorId,
                     dateKey = docDateKey,
                     createdAtMillis = createdMillis
@@ -447,20 +530,36 @@ class PortalRepository(
             )
         }
 
+        parsedRecords.sortByDescending { it.createdAtMillis }
+
         val statsData = statsSnap?.takeIf { it.exists() }?.data
-        val counterTotal = (statsData?.get("totalVisits") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
-        val counterUnique = (statsData?.get("uniqueVisitors") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
+        val counterTotal = (
+            (statsData?.get("totalVisits") as? Number)
+                ?: (statsData?.get("total") as? Number)
+                ?: (statsData?.get("count") as? Number)
+            )?.toLong()?.coerceAtLeast(0L) ?: 0L
+        val counterUnique = (
+            (statsData?.get("uniqueVisitors") as? Number)
+                ?: (statsData?.get("unique") as? Number)
+            )?.toLong()?.coerceAtLeast(0L) ?: 0L
         val counterTodayKey = (statsData?.get("todayKey") as? String).orEmpty().trim()
         val counterToday = if (counterTodayKey.isEmpty() || counterTodayKey == todayKey) {
-            (statsData?.get("todayVisits") as? Number)?.toLong()?.coerceAtLeast(0L) ?: 0L
+            (
+                (statsData?.get("todayVisits") as? Number)
+                    ?: (statsData?.get("today") as? Number)
+                )?.toLong()?.coerceAtLeast(0L) ?: 0L
         } else {
             0L
         }
         val counterUpdatedMillis = statsSnap?.takeIf { it.exists() }
-            ?.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-            ?.toDate()?.time ?: 0L
+            ?.let { snap ->
+                runCatching {
+                    snap.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+                        ?: snap.getTimestamp("lastVisitAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)?.toDate()?.time
+                }.getOrNull()
+            } ?: 0L
 
-        val totalVisits = maxOf(counterTotal, visitDocs.size.toLong())
+        val totalVisits = maxOf(counterTotal, parsedRecords.size.toLong())
         val todayVisits = maxOf(counterToday, visitsTodayFromLog).coerceAtMost(totalVisits)
         val last7Days = maxOf(visits7dFromLog, todayVisits).coerceAtMost(totalVisits)
         val uniqueVisitors = maxOf(counterUnique, uniqueIds.size.toLong()).coerceAtMost(totalVisits)

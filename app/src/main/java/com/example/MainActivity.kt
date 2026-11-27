@@ -74,6 +74,8 @@ import coil.compose.AsyncImage
 import com.example.auth.AdminAuthorizationState
 import com.example.auth.AdminVerificationLoadingScreen
 import com.example.auth.AuthScreen
+import com.example.auth.AuthenticatorLoginChallengeScreen
+import com.example.auth.LoginTwoFactorStore
 import com.example.auth.UnauthorizedAdminScreen
 import com.example.auth.isUserVerified
 import com.example.auth.observeAdminAuthorization
@@ -137,12 +139,14 @@ private enum class AppRootStage {
     SPLASH,
     AUTH,
     VERIFYING_ADMIN,
+    AUTHENTICATOR_CHALLENGE,
     UNAUTHORIZED,
     AUTHENTICATED
 }
 
 class MainActivity : ComponentActivity() {
     private val pendingNotificationTab = MutableStateFlow<NotificationCenterTab?>(null)
+    private val pendingGrantCandidateEmail = MutableStateFlow<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -161,10 +165,13 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             val requestedTab by pendingNotificationTab.collectAsStateWithLifecycle()
+            val requestedGrantEmail by pendingGrantCandidateEmail.collectAsStateWithLifecycle()
             LotPulseTheme {
                 LotPulseApp(
                     requestedNotificationTab = requestedTab,
-                    onConsumeNotificationTab = { pendingNotificationTab.value = null }
+                    onConsumeNotificationTab = { pendingNotificationTab.value = null },
+                    requestedGrantEmail = requestedGrantEmail,
+                    onConsumeGrantEmail = { pendingGrantCandidateEmail.value = null }
                 )
             }
         }
@@ -177,7 +184,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNotificationIntent(intent: Intent?) {
-        val rawTab = intent?.getStringExtra(SecurityNotificationHelper.EXTRA_OPEN_NOTIFICATIONS_TAB)
+        if (intent == null) return
+        val grantCandidate = intent.getStringExtra(SecurityNotificationHelper.EXTRA_GRANT_CANDIDATE_EMAIL)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        if (grantCandidate != null) {
+            pendingGrantCandidateEmail.value = grantCandidate
+            pendingNotificationTab.value = NotificationCenterTab.LOGIN_ALERTS
+            intent.removeExtra(SecurityNotificationHelper.EXTRA_GRANT_CANDIDATE_EMAIL)
+        }
+        val rawTab = intent.getStringExtra(SecurityNotificationHelper.EXTRA_OPEN_NOTIFICATIONS_TAB)
             ?: return
         pendingNotificationTab.value = when (rawTab) {
             SecurityNotificationHelper.TAB_INQUIRIES -> NotificationCenterTab.INQUIRIES
@@ -206,7 +222,9 @@ private fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 fun LotPulseApp(
     auth: FirebaseAuth = Firebase.auth,
     requestedNotificationTab: NotificationCenterTab? = null,
-    onConsumeNotificationTab: () -> Unit = {}
+    onConsumeNotificationTab: () -> Unit = {},
+    requestedGrantEmail: String? = null,
+    onConsumeGrantEmail: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -230,6 +248,9 @@ fun LotPulseApp(
     val verifiedUser = remember(user, authRefreshTick) {
         user?.takeIf { isUserVerified(it) }
     }
+    var passedAuthenticatorAuthTime by remember(verifiedUser?.uid) {
+        mutableStateOf<Long?>(null)
+    }
 
     val adminAuthState by produceState<AdminAuthorizationState>(
         initialValue = AdminAuthorizationState.Checking,
@@ -242,14 +263,26 @@ fun LotPulseApp(
             return@produceState
         }
         value = AdminAuthorizationState.Checking
-        observeAdminAuthorization(db, active).collect { state ->
+        observeAdminAuthorization(context, db, active).collect { state ->
             value = state
         }
     }
 
-    LaunchedEffect(adminAuthState) {
-        if (adminAuthState is AdminAuthorizationState.SessionExpired) {
+    val effectiveAdminState = when (val raw = adminAuthState) {
+        is AdminAuthorizationState.RequiresAuthenticator -> {
+            if (passedAuthenticatorAuthTime != null && passedAuthenticatorAuthTime == raw.authTimeSeconds) {
+                AdminAuthorizationState.Authorized(verifiedWithAuthenticator = true)
+            } else {
+                raw
+            }
+        }
+        else -> raw
+    }
+
+    LaunchedEffect(effectiveAdminState) {
+        if (effectiveAdminState is AdminAuthorizationState.SessionExpired) {
             skipAutoSignIn = true
+            LoginTwoFactorStore.clear(context)
             AdminAlertMonitorService.stop(context)
             signOut(credentialManager = credentialManager, scope = scope)
         }
@@ -258,9 +291,10 @@ fun LotPulseApp(
     val stage = when {
         showLaunchSplash -> AppRootStage.SPLASH
         verifiedUser == null -> AppRootStage.AUTH
-        adminAuthState is AdminAuthorizationState.Checking ||
-            adminAuthState is AdminAuthorizationState.SessionExpired -> AppRootStage.VERIFYING_ADMIN
-        adminAuthState is AdminAuthorizationState.Authorized -> AppRootStage.AUTHENTICATED
+        effectiveAdminState is AdminAuthorizationState.Checking ||
+            effectiveAdminState is AdminAuthorizationState.SessionExpired -> AppRootStage.VERIFYING_ADMIN
+        effectiveAdminState is AdminAuthorizationState.RequiresAuthenticator -> AppRootStage.AUTHENTICATOR_CHALLENGE
+        effectiveAdminState is AdminAuthorizationState.Authorized -> AppRootStage.AUTHENTICATED
         else -> AppRootStage.UNAUTHORIZED
     }
 
@@ -285,9 +319,34 @@ fun LotPulseApp(
             AppRootStage.VERIFYING_ADMIN -> AdminVerificationLoadingScreen(
                 email = verifiedUser?.email.orEmpty()
             )
+            AppRootStage.AUTHENTICATOR_CHALLENGE -> {
+                val challenge = effectiveAdminState as? AdminAuthorizationState.RequiresAuthenticator
+                val active = verifiedUser
+                if (challenge != null && active != null) {
+                    AuthenticatorLoginChallengeScreen(
+                        email = challenge.email,
+                        secretBase32 = challenge.secretBase32,
+                        onVerified = {
+                            LoginTwoFactorStore.markSessionVerified(
+                                context = context,
+                                uid = active.uid,
+                                authTimeSeconds = challenge.authTimeSeconds
+                            )
+                            passedAuthenticatorAuthTime = challenge.authTimeSeconds
+                        },
+                        onSignOut = {
+                            skipAutoSignIn = true
+                            passedAuthenticatorAuthTime = null
+                            LoginTwoFactorStore.clear(context)
+                            AdminAlertMonitorService.stop(context)
+                            signOut(credentialManager = credentialManager, scope = scope)
+                        }
+                    )
+                }
+            }
             AppRootStage.UNAUTHORIZED -> {
-                val errorState = adminAuthState as? AdminAuthorizationState.Error
-                val deniedState = adminAuthState as? AdminAuthorizationState.Denied
+                val errorState = effectiveAdminState as? AdminAuthorizationState.Error
+                val deniedState = effectiveAdminState as? AdminAuthorizationState.Denied
                 UnauthorizedAdminScreen(
                     email = errorState?.email
                         ?: deniedState?.email
@@ -297,6 +356,7 @@ fun LotPulseApp(
                     onRetry = { adminCheckTick++ },
                     onSignOut = {
                         skipAutoSignIn = true
+                        LoginTwoFactorStore.clear(context)
                         AdminAlertMonitorService.stop(context)
                         signOut(credentialManager = credentialManager, scope = scope)
                     }
@@ -304,13 +364,21 @@ fun LotPulseApp(
             }
             AppRootStage.AUTHENTICATED -> {
                 val activeUser = verifiedUser
+                val authInfo = effectiveAdminState as? AdminAuthorizationState.Authorized
                 if (activeUser != null) {
                     key(activeUser.uid) {
                         AuthenticatedLotAdmin(
                             activeUser = activeUser,
+                            verifiedWithAuthenticator = authInfo?.verifiedWithAuthenticator == true,
                             requestedNotificationTab = requestedNotificationTab,
                             onConsumeNotificationTab = onConsumeNotificationTab,
-                            onWillSignOut = { skipAutoSignIn = true }
+                            requestedGrantEmail = requestedGrantEmail,
+                            onConsumeGrantEmail = onConsumeGrantEmail,
+                            onWillSignOut = {
+                                skipAutoSignIn = true
+                                passedAuthenticatorAuthTime = null
+                                LoginTwoFactorStore.clear(context)
+                            }
                         )
                     }
                 }
@@ -393,8 +461,11 @@ private fun BrandLaunchSplash() {
 @Composable
 private fun AuthenticatedLotAdmin(
     activeUser: FirebaseUser,
+    verifiedWithAuthenticator: Boolean,
     requestedNotificationTab: NotificationCenterTab?,
     onConsumeNotificationTab: () -> Unit,
+    requestedGrantEmail: String?,
+    onConsumeGrantEmail: () -> Unit,
     onWillSignOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -437,8 +508,11 @@ private fun AuthenticatedLotAdmin(
         }
     )
 
-    LaunchedEffect(activeUser.uid) {
-        portalViewModel.registerAuthenticatedSession(activeUser)
+    LaunchedEffect(activeUser.uid, verifiedWithAuthenticator) {
+        portalViewModel.registerAuthenticatedSession(
+            user = activeUser,
+            verifiedWithAuthenticator = verifiedWithAuthenticator
+        )
         AdminAlertMonitorService.startIfEnabled(context)
     }
 
@@ -693,11 +767,23 @@ private fun AuthenticatedLotAdmin(
                 activeTab = notificationTab,
                 alerts = loginAlerts,
                 inquiriesState = inquiriesState,
+                adminAccessState = adminAccessState,
+                isMutatingAdminAccess = isPortalMutating,
+                currentSessionId = portalViewModel.currentSessionId,
+                currentSessionVerifiedWithAuthenticator = verifiedWithAuthenticator || authenticatorStatus.enabled,
+                preselectedGrantEmail = requestedGrantEmail,
+                onConsumePreselectedGrantEmail = onConsumeGrantEmail,
                 snackbarMessage = portalSnackbar,
                 onConsumeSnackbar = portalViewModel::consumeSnackbar,
                 onSelectTab = portalViewModel::selectNotificationTab,
                 onConfirmItWasMe = portalViewModel::confirmLoginAlertIsMe,
                 onRejectNotMe = portalViewModel::rejectLoginAlertNotMe,
+                onGrantAdminAccess = { email ->
+                    portalViewModel.grantAdminAccessFromBlockedAlert(email)
+                },
+                onRevokeAdminAccess = { email ->
+                    portalViewModel.revokeAdminAccessFromAlert(email)
+                },
                 onBack = { navController.popBackStack() }
             )
         }

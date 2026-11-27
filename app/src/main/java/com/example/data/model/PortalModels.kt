@@ -175,14 +175,62 @@ data class AdminAccessConfig(
     val adminEmails: List<String> = emptyList(),
     val updatedAt: Timestamp? = null
 ) {
+    sealed interface GrantEmailMergeResult {
+        data class Added(val updatedEmails: List<String>, val grantedEmail: String) : GrantEmailMergeResult
+        data class AlreadyAuthorized(val email: String) : GrantEmailMergeResult
+        data class Invalid(val reason: String) : GrantEmailMergeResult
+        data class LimitReached(val maxCount: Int) : GrantEmailMergeResult
+    }
+
     companion object {
         const val BOOTSTRAP_OWNER_EMAIL = "alifcarimports@gmail.com"
+        const val MAX_ADMIN_EMAILS = 20
+
+        fun isValidAdminEmail(rawEmail: String): Boolean {
+            val trimmed = rawEmail.trim()
+            if (trimmed.length !in 3..254) return false
+            if (trimmed.any { it.isWhitespace() }) return false
+            val atIndex = trimmed.indexOf('@')
+            if (atIndex <= 0 || atIndex != trimmed.lastIndexOf('@')) return false
+            val domain = trimmed.substring(atIndex + 1)
+            if (domain.length < 3 || !domain.contains('.')) return false
+            if (domain.startsWith('.') || domain.endsWith('.') || domain.contains("..")) return false
+            return true
+        }
 
         fun normalizeEmails(emails: List<String>): List<String> = emails
             .map { it.trim().lowercase(Locale.US) }
             .filter { it.isNotEmpty() && it.length <= 254 }
             .distinct()
-            .take(20)
+            .take(MAX_ADMIN_EMAILS)
+
+        fun isEmailAuthorized(rawEmail: String, allowlistedEmails: List<String>): Boolean {
+            val normalized = rawEmail.trim().lowercase(Locale.US)
+            if (normalized.isEmpty()) return false
+            if (normalized == BOOTSTRAP_OWNER_EMAIL) return true
+            return allowlistedEmails.any { it.trim().lowercase(Locale.US) == normalized }
+        }
+
+        fun mergeGrantedEmail(
+            existingEmails: List<String>,
+            rawEmail: String
+        ): GrantEmailMergeResult {
+            if (!isValidAdminEmail(rawEmail)) {
+                return GrantEmailMergeResult.Invalid("This alert does not contain a valid email address.")
+            }
+            val normalizedTarget = rawEmail.trim().lowercase(Locale.US)
+            val normalizedExisting = normalizeEmails(existingEmails)
+            if (normalizedTarget == BOOTSTRAP_OWNER_EMAIL || normalizedTarget in normalizedExisting) {
+                return GrantEmailMergeResult.AlreadyAuthorized(normalizedTarget)
+            }
+            if (normalizedExisting.size >= MAX_ADMIN_EMAILS) {
+                return GrantEmailMergeResult.LimitReached(MAX_ADMIN_EMAILS)
+            }
+            return GrantEmailMergeResult.Added(
+                updatedEmails = normalizedExisting + normalizedTarget,
+                grantedEmail = normalizedTarget
+            )
+        }
 
         fun toFirestoreMap(emails: List<String>): Map<String, Any> = mapOf(
             "adminEmails" to normalizeEmails(emails),

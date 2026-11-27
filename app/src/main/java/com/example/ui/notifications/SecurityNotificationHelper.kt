@@ -14,6 +14,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.data.model.AdminAccessConfig
 import com.example.data.model.CustomerInquiry
 import com.example.data.model.LoginSecurityAlert
 
@@ -23,6 +24,7 @@ object SecurityNotificationHelper {
     const val CHANNEL_LIVE_MONITOR = "admin_live_monitor"
 
     const val EXTRA_OPEN_NOTIFICATIONS_TAB = "extra_open_notifications_tab"
+    const val EXTRA_GRANT_CANDIDATE_EMAIL = "extra_grant_candidate_email"
     const val TAB_LOGIN_ALERTS = "login_alerts"
     const val TAB_INQUIRIES = "inquiries"
 
@@ -141,18 +143,25 @@ object SecurityNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = if (alert.isUnauthorizedAttempt) {
-            "Admin Page Login Attempt (${alert.platform})"
-        } else {
-            "Admin Page Sign-In (${alert.platform})"
+        val canOfferGrant = alert.isUnauthorizedAttempt && AdminAccessConfig.isValidAdminEmail(alert.email)
+
+        val title = when {
+            alert.isUnauthorizedAttempt -> "Blocked Admin Login Attempt (${alert.platform})"
+            alert.isOwnerAuthenticatorVerified -> "Verified Admin Sign-In (${alert.platform})"
+            else -> "Admin Page Sign-In (${alert.platform})"
         }
-        val body = if (alert.isUnauthorizedAttempt) {
-            "${alert.email.ifBlank { "Unknown account" }} tried to log into the Admin Page • ${alert.deviceName} • ${alert.location}."
-        } else {
-            "${alert.email.ifBlank { "Admin" }} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
+        val body = when {
+            canOfferGrant ->
+                "${alert.email.trim()} was blocked from the Admin Page • ${alert.deviceName} • ${alert.location}. Tap to keep blocked or grant admin access."
+            alert.isUnauthorizedAttempt ->
+                "${alert.email.ifBlank { "Unknown account" }} tried to log into the Admin Page • ${alert.deviceName} • ${alert.location}."
+            alert.isOwnerAuthenticatorVerified ->
+                "${alert.email.trim()} signed in with Google Authenticator • ${alert.deviceName} • ${alert.location}."
+            else ->
+                "${alert.email.ifBlank { "Admin" }} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
         }
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_LOGIN_ALERTS)
+        val builder = NotificationCompat.Builder(context, CHANNEL_LOGIN_ALERTS)
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setContentTitle(title)
             .setContentText(body)
@@ -163,7 +172,23 @@ object SecurityNotificationHelper {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
+
+        if (canOfferGrant) {
+            val grantIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_OPEN_NOTIFICATIONS_TAB, TAB_LOGIN_ALERTS)
+                putExtra(EXTRA_GRANT_CANDIDATE_EMAIL, alert.email.trim())
+            }
+            val grantPendingIntent = PendingIntent.getActivity(
+                context,
+                ("grant_${alert.id}").hashCode(),
+                grantIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(0, "Grant Admin Access", grantPendingIntent)
+        }
+
+        val notification = builder.build()
 
         runCatching {
             NotificationManagerCompat.from(context).notify(

@@ -3,6 +3,8 @@ package com.example.data.firebase
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.example.auth.AdminAuthorizationPolicy
+import com.example.auth.LoginTwoFactorStore
 import com.example.data.model.ActiveDeviceSession
 import com.example.data.model.AdminDeviceStatus
 import com.example.data.model.AuthenticatorStatus
@@ -187,7 +189,11 @@ class SecuritySessionRepository(
 
                     mergeRemoteAlerts(remoteAlerts)
                     remoteAlerts
-                        .filter { it.decision == LoginAlertDecision.PENDING && !existingIds.contains(it.id) }
+                        .filter {
+                            it.decision == LoginAlertDecision.PENDING &&
+                                !it.isOwnerAuthenticatorVerified &&
+                                !existingIds.contains(it.id)
+                        }
                         .forEach { alert ->
                             activeAlertCallback?.invoke(alert)
                         }
@@ -275,6 +281,7 @@ class SecuritySessionRepository(
 
     suspend fun registerCurrentDeviceSignIn(
         user: FirebaseUser,
+        verifiedWithAuthenticator: Boolean = false,
         onNewLoginAlert: (LoginSecurityAlert) -> Unit
     ) {
         isRegisteringCurrentSession = true
@@ -351,6 +358,8 @@ class SecuritySessionRepository(
 
         var createdAlertId: String? = null
         if (isFreshSignIn) {
+            val isOwnerAuthVerified = verifiedWithAuthenticator &&
+                AdminAuthorizationPolicy.isBootstrapOwnerEmail(email)
             val alert = LoginSecurityAlert(
                 id = "alert_${UUID.randomUUID().toString().replace("-", "").take(12)}",
                 sessionId = sessionId,
@@ -359,11 +368,18 @@ class SecuritySessionRepository(
                 platform = "Mobile App",
                 location = resolvedLocation,
                 timestampMillis = now,
-                decision = LoginAlertDecision.PENDING
+                decision = if (isOwnerAuthVerified) {
+                    LoginAlertDecision.CONFIRMED_ME
+                } else {
+                    LoginAlertDecision.PENDING
+                },
+                verifiedWithAuthenticator = isOwnerAuthVerified
             )
             createdAlertId = alert.id
             prependLocalAlert(alert)
-            onNewLoginAlert(alert)
+            if (!isOwnerAuthVerified) {
+                onNewLoginAlert(alert)
+            }
             mirrorAlertToCloud(user.uid, alert)
         }
 
@@ -621,7 +637,12 @@ class SecuritySessionRepository(
                 updatedAtMillis = System.currentTimeMillis(),
                 isLoaded = true
             )
-            Result.success("Google Authenticator enabled. Removing active devices, changing password, and disabling 2FA now require a 6-digit code.")
+            val sessionAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
+                ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
+            if (sessionAuthSeconds > 0L) {
+                LoginTwoFactorStore.markSessionVerified(appContext, user.uid, sessionAuthSeconds)
+            }
+            Result.success("Google Authenticator enabled. Signing in with alifcarimports@gmail.com, removing active devices, changing password, and disabling 2FA now require a 6-digit code.")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -989,6 +1010,7 @@ class SecuritySessionRepository(
         lastHeartbeatSyncedAtMillis = 0L
         hasCompletedInitialRegistration = false
         isRegisteringCurrentSession = false
+        LoginTwoFactorStore.clear(appContext)
         saveLocalPrefs()
     }
 
@@ -1270,21 +1292,36 @@ class SecuritySessionRepository(
     private suspend fun mirrorAlertToCloud(uid: String, alert: LoginSecurityAlert) {
         val path = "$COL_LOGIN_ALERTS/${alert.id}"
         try {
-            val payload = mapOf(
-                "id" to alert.id,
-                "sessionId" to alert.sessionId,
-                "uid" to uid.take(128),
-                "email" to alert.email.trim().take(254),
-                "deviceName" to alert.deviceName.trim().ifBlank { "Android Device" }.take(160),
-                "platform" to alert.platform.trim().ifBlank { "Mobile App" }.take(60),
-                "location" to alert.location.trim().ifBlank { "Unknown location" }.take(160),
-                "timestampMillis" to alert.timestampMillis.coerceAtLeast(0L),
-                "decision" to alert.decision.value,
-                "sourcePage" to alert.sourcePage.trim().ifBlank { "admin" }.take(120),
-                "createdAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            db.collection(COL_LOGIN_ALERTS).document(alert.id).set(payload).await()
+            val payload = buildMap<String, Any> {
+                put("id", alert.id)
+                put("sessionId", alert.sessionId)
+                put("uid", uid.take(128))
+                put("email", alert.email.trim().take(254))
+                put("deviceName", alert.deviceName.trim().ifBlank { "Android Device" }.take(160))
+                put("platform", alert.platform.trim().ifBlank { "Mobile App" }.take(60))
+                put("location", alert.location.trim().ifBlank { "Unknown location" }.take(160))
+                put("timestampMillis", alert.timestampMillis.coerceAtLeast(0L))
+                // Firestore rules enforce decision == 'pending' on initial document create
+                put("decision", LoginAlertDecision.PENDING.value)
+                put("sourcePage", alert.sourcePage.trim().ifBlank { "admin" }.take(120))
+                if (alert.verifiedWithAuthenticator) {
+                    put("attemptType", LoginSecurityAlert.ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED)
+                }
+                put("createdAt", FieldValue.serverTimestamp())
+                put("updatedAt", FieldValue.serverTimestamp())
+            }
+            val docRef = db.collection(COL_LOGIN_ALERTS).document(alert.id)
+            docRef.set(payload).await()
+            if (alert.decision == LoginAlertDecision.CONFIRMED_ME) {
+                runCatching {
+                    docRef.update(
+                        mapOf(
+                            "decision" to LoginAlertDecision.CONFIRMED_ME.value,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1416,17 +1453,29 @@ class SecuritySessionRepository(
         val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
             attemptType.contains("denied", ignoreCase = true) ||
             attemptType.contains("unauthorized", ignoreCase = true)
+        val email = (data["email"] as? String).orEmpty().trim()
+        val verifiedByAuth = !isUnauthorized && (
+            (data["authenticatorVerified"] as? Boolean == true) ||
+                LoginSecurityAlert.isAuthenticatorVerifiedAttemptType(attemptType)
+            )
+        val rawDecision = LoginAlertDecision.fromValue(data["decision"] as? String)
+        val effectiveDecision = if (verifiedByAuth && AdminAuthorizationPolicy.isBootstrapOwnerEmail(email)) {
+            LoginAlertDecision.CONFIRMED_ME
+        } else {
+            rawDecision
+        }
         return LoginSecurityAlert(
             id = id,
             sessionId = (data["sessionId"] as? String).orEmpty(),
-            email = (data["email"] as? String).orEmpty().trim(),
+            email = email,
             deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Admin Device" },
             platform = platform,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             timestampMillis = tsMillis,
-            decision = LoginAlertDecision.fromValue(data["decision"] as? String),
+            decision = effectiveDecision,
             sourcePage = sourcePage,
-            isUnauthorizedAttempt = isUnauthorized
+            isUnauthorizedAttempt = isUnauthorized,
+            verifiedWithAuthenticator = verifiedByAuth
         )
     }
 
@@ -1598,7 +1647,8 @@ class SecuritySessionRepository(
                                     timestampMillis = obj.optLong("timestampMillis"),
                                     decision = LoginAlertDecision.fromValue(obj.optString("decision")),
                                     sourcePage = obj.optString("sourcePage", "admin"),
-                                    isUnauthorizedAttempt = obj.optBoolean("isUnauthorizedAttempt", false)
+                                    isUnauthorizedAttempt = obj.optBoolean("isUnauthorizedAttempt", false),
+                                    verifiedWithAuthenticator = obj.optBoolean("verifiedWithAuthenticator", false)
                                 )
                             )
                         }
@@ -1645,6 +1695,7 @@ class SecuritySessionRepository(
                     put("decision", a.decision.value)
                     put("sourcePage", a.sourcePage)
                     put("isUnauthorizedAttempt", a.isUnauthorizedAttempt)
+                    put("verifiedWithAuthenticator", a.verifiedWithAuthenticator)
                 }
             )
         }

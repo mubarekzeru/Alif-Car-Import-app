@@ -104,6 +104,9 @@ class PortalViewModel(
     val isRefreshingSessions: StateFlow<Boolean> = securityRepository.isRefreshing
     val authenticatorStatus: StateFlow<AuthenticatorStatus> = securityRepository.authenticatorStatus
 
+    val currentSessionId: String
+        get() = securityRepository.currentSessionId()
+
     val showroomConfig: StateFlow<ShowroomConfig> = repository.observeShowroomConfig()
         .catch { error ->
             val firestoreError = generateSequence(error) { it.cause }
@@ -182,11 +185,17 @@ class PortalViewModel(
         }
     }
 
-    fun registerAuthenticatedSession(user: FirebaseUser) {
+    fun registerAuthenticatedSession(
+        user: FirebaseUser,
+        verifiedWithAuthenticator: Boolean = false
+    ) {
         viewModelScope.launch {
             // Register this phone's session as ACTIVE in Firestore FIRST before attaching
             // snapshot listeners so a stale pre-login "revoked" doc never kicks the user out twice.
-            securityRepository.registerCurrentDeviceSignIn(user) { alert ->
+            securityRepository.registerCurrentDeviceSignIn(
+                user = user,
+                verifiedWithAuthenticator = verifiedWithAuthenticator
+            ) { alert ->
                 SecurityNotificationHelper.showLoginAlertNotification(appContext, alert)
             }
             securityRepository.startObservingCloudSecurity(
@@ -459,8 +468,52 @@ class PortalViewModel(
         }
     }
 
+    fun grantAdminAccessFromBlockedAlert(email: String, onSuccess: () -> Unit = {}) {
+        if (_isMutating.value) return
+        val normalized = email.trim().lowercase(java.util.Locale.US)
+        viewModelScope.launch {
+            _isMutating.value = true
+            val result = repository.grantAdminAccessEmail(normalized)
+            _isMutating.value = false
+            result.onSuccess { newlyAdded ->
+                _snackbarMessage.value = if (newlyAdded) {
+                    "Granted admin access to $normalized"
+                } else {
+                    "$normalized already has admin access"
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to grant admin access"
+            }
+        }
+    }
+
+    fun revokeAdminAccessFromAlert(email: String, onSuccess: () -> Unit = {}) {
+        if (_isMutating.value) return
+        val normalized = email.trim().lowercase(java.util.Locale.US)
+        viewModelScope.launch {
+            _isMutating.value = true
+            val result = repository.revokeAdminAccessEmail(normalized)
+            _isMutating.value = false
+            result.onSuccess { removed ->
+                _snackbarMessage.value = if (removed) {
+                    "Revoked admin access for $normalized"
+                } else {
+                    "$normalized is already blocked"
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _snackbarMessage.value = err.localizedMessage ?: "Failed to revoke admin access"
+            }
+        }
+    }
+
     fun pendingAlertsCount(alerts: List<LoginSecurityAlert>): Int =
-        alerts.count { it.decision == LoginAlertDecision.PENDING }
+        alerts.count {
+            !it.isUnauthorizedAttempt &&
+                !it.isOwnerAuthenticatorVerified &&
+                it.decision == LoginAlertDecision.PENDING
+        }
 
     private companion object {
         const val TAG = "PortalVM"

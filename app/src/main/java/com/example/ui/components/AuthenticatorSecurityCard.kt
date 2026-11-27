@@ -142,9 +142,9 @@ fun AuthenticatorSecurityCard(
                     }
                     Text(
                         text = if (status.enabled) {
-                            "6-digit Authenticator code is required to remove active devices, change password, or disable 2FA"
+                            "6-digit Authenticator code is required to sign in with alifcarimports@gmail.com, remove active devices, change password, or disable 2FA"
                         } else {
-                            "Connect Google Authenticator to protect active device removal and password changes"
+                            "Connect Google Authenticator to require a 6-digit code when signing in with alifcarimports@gmail.com and for sensitive security actions"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -189,7 +189,7 @@ fun AuthenticatorSecurityCard(
                                 shape = MaterialTheme.shapes.medium
                             ) {
                                 Text(
-                                    text = "Enable Google Authenticator so no one else can remove your active devices, sign out all devices, or change your admin password without your live 6-digit code.",
+                                    text = "Enable Google Authenticator so signing in with alifcarimports@gmail.com, removing active devices, signing out all devices, and changing your admin password require your live 6-digit code.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(10.dp)
@@ -450,7 +450,7 @@ fun AuthenticatorSecurityCard(
                             shape = MaterialTheme.shapes.medium
                         ) {
                             Text(
-                                text = "Protected (${status.accountLabel.ifBlank { "Admin" }}): Removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code.",
+                                text = "Protected (${status.accountLabel.ifBlank { "Admin" }}): Signing in with alifcarimports@gmail.com, removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = EmeraldAvailable,
                                 modifier = Modifier

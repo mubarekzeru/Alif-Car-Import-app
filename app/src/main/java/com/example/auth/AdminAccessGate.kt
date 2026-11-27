@@ -48,7 +48,9 @@ import com.example.R
 import com.example.data.firebase.OperationType
 import com.example.data.firebase.handleFirestoreError
 import com.example.data.model.AdminAccessConfig
+import android.content.Context
 import android.os.Build
+import com.example.data.security.TotpAuthenticator
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -68,7 +70,14 @@ import java.util.UUID
 
 sealed interface AdminAuthorizationState {
     data object Checking : AdminAuthorizationState
-    data object Authorized : AdminAuthorizationState
+    data class RequiresAuthenticator(
+        val email: String,
+        val secretBase32: String,
+        val authTimeSeconds: Long
+    ) : AdminAuthorizationState
+    data class Authorized(
+        val verifiedWithAuthenticator: Boolean = false
+    ) : AdminAuthorizationState
     data class SessionExpired(val email: String) : AdminAuthorizationState
     data class Denied(val email: String) : AdminAuthorizationState
     data class Error(val email: String, val message: String) : AdminAuthorizationState
@@ -96,6 +105,7 @@ object AdminAuthorizationPolicy {
 }
 
 fun observeAdminAuthorization(
+    context: Context,
     db: FirebaseFirestore,
     user: FirebaseUser
 ): Flow<AdminAuthorizationState> = flow {
@@ -145,7 +155,69 @@ fun observeAdminAuthorization(
     }
 
     if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
-        emit(AdminAuthorizationState.Authorized)
+        val alreadyVerified = LoginTwoFactorStore.isSessionVerified(
+            context = context,
+            uid = user.uid,
+            authTimeSeconds = userAuthTimeSeconds
+        )
+        val authSnap = try {
+            db.collection("config")
+                .document("authenticator")
+                .get(Source.SERVER)
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val cached = runCatching {
+                db.collection("config")
+                    .document("authenticator")
+                    .get(Source.CACHE)
+                    .await()
+            }.getOrNull()
+            if (cached != null) {
+                cached
+            } else if (alreadyVerified) {
+                emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = true))
+                return@flow
+            } else {
+                val firestoreError = unwrapFirestoreException(e)
+                if (firestoreError?.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+                    null
+                } else {
+                    handleFirestoreError(e, OperationType.GET, "config/authenticator")
+                    emit(
+                        AdminAuthorizationState.Error(
+                            email = rawEmail,
+                            message = "Unable to check Google Authenticator status right now. Check your internet connection and tap Re-check."
+                        )
+                    )
+                    return@flow
+                }
+            }
+        }
+
+        val authEnabled = authSnap?.exists() == true && authSnap.getBoolean("enabled") == true
+        val secretBase32 = authSnap?.getString("secretBase32").orEmpty().trim()
+        val hasValidAuthenticator = authEnabled && TotpAuthenticator.isValidSecretBase32(secretBase32)
+
+        if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = rawEmail,
+                authenticatorEnabled = authEnabled,
+                secretBase32 = secretBase32,
+                alreadyVerifiedForSession = alreadyVerified
+            )
+        ) {
+            emit(
+                AdminAuthorizationState.RequiresAuthenticator(
+                    email = rawEmail,
+                    secretBase32 = secretBase32,
+                    authTimeSeconds = userAuthTimeSeconds
+                )
+            )
+            return@flow
+        }
+
+        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = hasValidAuthenticator))
         return@flow
     }
 
@@ -212,7 +284,7 @@ fun observeAdminAuthorization(
         return@flow
     }
 
-    emit(AdminAuthorizationState.Authorized)
+    emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
 
     // Keep observing config/adminAccess in real time so if the owner revokes this admin email,
     // access (including all vehicle listings) is revoked immediately.
@@ -231,7 +303,7 @@ fun observeAdminAuthorization(
                     allowlistedEmails = emails
                 )
                 if (stillApproved) {
-                    AdminAuthorizationState.Authorized
+                    AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false)
                 } else {
                     AdminAuthorizationState.Denied(rawEmail)
                 }

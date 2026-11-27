@@ -146,7 +146,8 @@ data class LoginSecurityAlert(
     val timestampMillis: Long,
     val decision: LoginAlertDecision = LoginAlertDecision.PENDING,
     val sourcePage: String = "admin",
-    val isUnauthorizedAttempt: Boolean = false
+    val isUnauthorizedAttempt: Boolean = false,
+    val verifiedWithAuthenticator: Boolean = false
 ) {
     val isAdminPageEvent: Boolean
         get() = isAdminPageLoginEvent(
@@ -155,7 +156,33 @@ data class LoginSecurityAlert(
             eventType = if (isUnauthorizedAttempt) "admin_login_attempt" else "admin_login"
         )
 
+    val isOwnerAuthenticatorVerified: Boolean
+        get() = isOwnerAuthenticatorVerifiedLogin(
+            email = email,
+            verifiedWithAuthenticator = verifiedWithAuthenticator,
+            isUnauthorizedAttempt = isUnauthorizedAttempt
+        )
+
     companion object {
+        const val ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED = "authenticator_verified"
+
+        fun isAuthenticatorVerifiedAttemptType(attemptType: String?): Boolean {
+            val clean = attemptType.orEmpty().trim().lowercase()
+            if (clean.isEmpty()) return false
+            return clean.contains("authenticator") ||
+                clean.contains("totp") ||
+                clean.contains("2fa") ||
+                clean.contains("mfa")
+        }
+
+        fun isOwnerAuthenticatorVerifiedLogin(
+            email: String?,
+            verifiedWithAuthenticator: Boolean,
+            isUnauthorizedAttempt: Boolean
+        ): Boolean {
+            if (isUnauthorizedAttempt || !verifiedWithAuthenticator) return false
+            return email.orEmpty().trim().equals(AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL, ignoreCase = true)
+        }
         private val NON_ADMIN_PAGE_TOKENS = listOf(
             "visitor",
             "visitors",

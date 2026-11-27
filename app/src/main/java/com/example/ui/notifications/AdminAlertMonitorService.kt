@@ -131,7 +131,10 @@ class AdminAlertMonitorService : Service() {
                 if (error != null || snapshot == null) return@addSnapshotListener
                 snapshot.documents.forEach { doc ->
                     val alert = parseAlert(doc) ?: return@forEach
-                    if (alert.decision == LoginAlertDecision.PENDING && alert.isAdminPageEvent) {
+                    if (alert.decision == LoginAlertDecision.PENDING &&
+                        !alert.isOwnerAuthenticatorVerified &&
+                        alert.isAdminPageEvent
+                    ) {
                         SecurityNotificationHelper.showLoginAlertNotification(applicationContext, alert)
                     }
                 }
@@ -225,17 +228,31 @@ class AdminAlertMonitorService : Service() {
         val isUnauthorized = attemptType.contains("failed", ignoreCase = true) ||
             attemptType.contains("denied", ignoreCase = true) ||
             attemptType.contains("unauthorized", ignoreCase = true)
+        val email = (data["email"] as? String).orEmpty().trim()
+        val verifiedByAuth = !isUnauthorized && (
+            (data["authenticatorVerified"] as? Boolean == true) ||
+                LoginSecurityAlert.isAuthenticatorVerifiedAttemptType(attemptType)
+            )
+        val rawDecision = LoginAlertDecision.fromValue(data["decision"] as? String)
+        val effectiveDecision = if (verifiedByAuth &&
+            email.equals(com.example.data.model.AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL, ignoreCase = true)
+        ) {
+            LoginAlertDecision.CONFIRMED_ME
+        } else {
+            rawDecision
+        }
         return LoginSecurityAlert(
             id = id,
             sessionId = (data["sessionId"] as? String).orEmpty(),
-            email = (data["email"] as? String).orEmpty().trim(),
+            email = email,
             deviceName = (data["deviceName"] as? String).orEmpty().trim().ifBlank { "Admin Device" },
             platform = platform,
             location = (data["location"] as? String).orEmpty().trim().ifBlank { "Unknown location" },
             timestampMillis = tsMillis,
-            decision = LoginAlertDecision.fromValue(data["decision"] as? String),
+            decision = effectiveDecision,
             sourcePage = sourcePage,
-            isUnauthorizedAttempt = isUnauthorized
+            isUnauthorizedAttempt = isUnauthorized,
+            verifiedWithAuthenticator = verifiedByAuth
         )
     }
 

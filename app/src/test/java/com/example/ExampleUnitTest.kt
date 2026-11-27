@@ -631,6 +631,127 @@ class ExampleUnitTest {
         assertEquals(5L, oneYear.periodVisits)
         assertEquals(12, oneYear.buckets.size)
     }
+
+    @Test
+    fun adminAccessConfig_validatesAndMergesGrantedBlockedEmails() {
+        val config = com.example.data.model.AdminAccessConfig
+
+        assertTrue(config.isValidAdminEmail("Manager@AlifCarImport.com"))
+        assertFalse(config.isValidAdminEmail(""))
+        assertFalse(config.isValidAdminEmail("Unknown account"))
+        assertFalse(config.isValidAdminEmail("not-an-email"))
+        assertFalse(config.isValidAdminEmail("bad@.com"))
+        assertFalse(config.isValidAdminEmail("bad@domain..com"))
+
+        // Adding a valid new email normalizes and preserves existing admins
+        val added = config.mergeGrantedEmail(
+            existingEmails = listOf("Existing@Example.com"),
+            rawEmail = " NewAdmin@AlifCarImport.com "
+        )
+        assertTrue(added is com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.Added)
+        val addedResult = added as com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.Added
+        assertEquals("newadmin@alifcarimport.com", addedResult.grantedEmail)
+        assertEquals(
+            listOf("existing@example.com", "newadmin@alifcarimport.com"),
+            addedResult.updatedEmails
+        )
+
+        // Already-authorized email or bootstrap owner returns AlreadyAuthorized without duplicating
+        val duplicate = config.mergeGrantedEmail(
+            existingEmails = listOf("newadmin@alifcarimport.com"),
+            rawEmail = "NewAdmin@AlifCarImport.com"
+        )
+        assertTrue(duplicate is com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.AlreadyAuthorized)
+
+        val owner = config.mergeGrantedEmail(
+            existingEmails = emptyList(),
+            rawEmail = "AlifCarImports@gmail.com"
+        )
+        assertTrue(owner is com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.AlreadyAuthorized)
+
+        // Invalid email is rejected
+        val invalid = config.mergeGrantedEmail(emptyList(), "Unknown user")
+        assertTrue(invalid is com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.Invalid)
+
+        // 20-email limit is enforced to match firestore.rules
+        val fullList = (1..20).map { "admin$it@alifcarimport.com" }
+        val limitHit = config.mergeGrantedEmail(fullList, "admin21@alifcarimport.com")
+        assertTrue(limitHit is com.example.data.model.AdminAccessConfig.GrantEmailMergeResult.LimitReached)
+    }
+
+    @Test
+    fun loginAuthenticatorPolicy_andOwnerVerifiedAlert_behaveSecurely() {
+        val validSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+        // Owner email with Authenticator enabled and unverified session MUST trigger 2FA challenge
+        assertTrue(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "AlifCarImports@gmail.com",
+                authenticatorEnabled = true,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = false
+            )
+        )
+        // Already verified for this sign-in session -> do not double-prompt
+        assertFalse(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "alifcarimports@gmail.com",
+                authenticatorEnabled = true,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = true
+            )
+        )
+        // Authenticator disabled -> no challenge
+        assertFalse(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "alifcarimports@gmail.com",
+                authenticatorEnabled = false,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = false
+            )
+        )
+        // Different admin email -> does not trigger owner-only 2FA challenge
+        assertFalse(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "staff@alifcarimport.com",
+                authenticatorEnabled = true,
+                secretBase32 = validSecret,
+                alreadyVerifiedForSession = false
+            )
+        )
+
+        // Attempt type parsing & owner-verified alert detection (hides "It was me" / "It wasn't me")
+        assertTrue(
+            com.example.data.model.LoginSecurityAlert.isAuthenticatorVerifiedAttemptType(
+                com.example.data.model.LoginSecurityAlert.ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED
+            )
+        )
+        assertTrue(com.example.data.model.LoginSecurityAlert.isAuthenticatorVerifiedAttemptType("totp_2fa"))
+        assertFalse(com.example.data.model.LoginSecurityAlert.isAuthenticatorVerifiedAttemptType("password_login"))
+
+        val ownerVerifiedAlert = com.example.data.model.LoginSecurityAlert(
+            id = "a1",
+            sessionId = "s1",
+            email = "alifcarimports@gmail.com",
+            deviceName = "Pixel 9",
+            platform = "Mobile App",
+            location = "Addis Ababa",
+            timestampMillis = 1_760_000_000_000L,
+            verifiedWithAuthenticator = true
+        )
+        assertTrue(ownerVerifiedAlert.isOwnerAuthenticatorVerified)
+
+        val ownerUnverifiedAlert = ownerVerifiedAlert.copy(verifiedWithAuthenticator = false)
+        assertFalse(ownerUnverifiedAlert.isOwnerAuthenticatorVerified)
+
+        val otherAdminAlert = ownerVerifiedAlert.copy(email = "partner@alifcarimport.com")
+        assertFalse(otherAdminAlert.isOwnerAuthenticatorVerified)
+
+        val blockedOwnerAttempt = ownerVerifiedAlert.copy(isUnauthorizedAttempt = true)
+        assertFalse(blockedOwnerAttempt.isOwnerAuthenticatorVerified)
+    }
 }
+
+
 
 

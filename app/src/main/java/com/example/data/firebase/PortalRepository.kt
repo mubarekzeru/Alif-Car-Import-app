@@ -271,6 +271,70 @@ class PortalRepository(
         }
     }
 
+    suspend fun grantAdminAccessEmail(rawEmail: String): Result<Boolean> {
+        val path = "config/adminAccess"
+        return try {
+            requireSignedIn()
+            val snapshot = runCatching { adminAccessDoc.get(Source.SERVER).await() }
+                .getOrElse { adminAccessDoc.get().await() }
+            val existing = (snapshot.data?.get("adminEmails") as? List<*>)
+                ?.mapNotNull { it as? String }
+                ?: emptyList()
+            when (val merge = AdminAccessConfig.mergeGrantedEmail(existing, rawEmail)) {
+                is AdminAccessConfig.GrantEmailMergeResult.Invalid ->
+                    Result.failure(IllegalArgumentException(merge.reason))
+                is AdminAccessConfig.GrantEmailMergeResult.LimitReached ->
+                    Result.failure(
+                        IllegalStateException(
+                            "Admin allowlist limit (${merge.maxCount}) reached. Remove an old admin in Settings -> Admin Access first."
+                        )
+                    )
+                is AdminAccessConfig.GrantEmailMergeResult.AlreadyAuthorized ->
+                    Result.success(false)
+                is AdminAccessConfig.GrantEmailMergeResult.Added -> {
+                    adminAccessDoc.set(AdminAccessConfig.toFirestoreMap(merge.updatedEmails)).await()
+                    Result.success(true)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(friendlyException(e))
+        }
+    }
+
+    suspend fun revokeAdminAccessEmail(rawEmail: String): Result<Boolean> {
+        val path = "config/adminAccess"
+        return try {
+            requireSignedIn()
+            val target = rawEmail.trim().lowercase(Locale.US)
+            if (target == AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL) {
+                return Result.failure(
+                    IllegalArgumentException("The primary owner account cannot be revoked.")
+                )
+            }
+            val snapshot = runCatching { adminAccessDoc.get(Source.SERVER).await() }
+                .getOrElse { adminAccessDoc.get().await() }
+            val existing = AdminAccessConfig.normalizeEmails(
+                (snapshot.data?.get("adminEmails") as? List<*>)
+                    ?.mapNotNull { it as? String }
+                    ?: emptyList()
+            )
+            if (target !in existing) {
+                return Result.success(false)
+            }
+            val updated = existing.filterNot { it == target }
+            adminAccessDoc.set(AdminAccessConfig.toFirestoreMap(updated)).await()
+            Result.success(true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(friendlyException(e))
+        }
+    }
+
     fun observeWebsiteVisitorStats(): Flow<WebsiteVisitorStats> = flow {
         if (auth.currentUser == null) {
             emit(WebsiteVisitorStats(isLoaded = true))

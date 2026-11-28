@@ -118,14 +118,17 @@ fun observeAdminAuthorization(
 
     emit(AdminAuthorizationState.Checking)
 
-    // Ensure a valid Firebase Auth ID token & accurate authTimestamp before checking 2FA
+    // Force-refresh user & ID token first so Firestore SDK always has the newly issued auth token
+    // immediately after email/password or Google sign-in.
+    runCatching { user.reload().await() }
     val tokenAuthTimeSeconds = runCatching {
-        user.getIdToken(false).await().authTimestamp
+        user.getIdToken(true).await().authTimestamp
     }.getOrDefault(0L).let { ts ->
-        if (ts > 0L) ts else runCatching { user.getIdToken(true).await().authTimestamp }.getOrDefault(0L)
+        if (ts > 0L) ts else runCatching { user.getIdToken(false).await().authTimestamp }.getOrDefault(0L)
     }
     val userAuthTimeSeconds = tokenAuthTimeSeconds.takeIf { it > 0L }
-        ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
+        ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L).takeIf { it > 0L }
+        ?: (System.currentTimeMillis() / 1000L)
 
     val db = FirestoreProvider.get(context)
 
@@ -142,37 +145,42 @@ fun observeAdminAuthorization(
         return@flow
     }
 
-    if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
+    suspend fun evaluateAuthorizedWithAuthenticator(): AdminAuthorizationState {
         val alreadyVerified = LoginTwoFactorStore.isSessionVerified(
             context = context,
             uid = user.uid,
             authTimeSeconds = userAuthTimeSeconds
         )
-        // Always fetch authoritative 2FA config from Firestore (falls back to cache/local prefs offline)
-        val cloudAuth = SecuritySessionRepository.fetchAuthenticatorConfigFromCloud(context)
+        // Always fetch authoritative 2FA config from Firestore (with retry & local reconciliation)
+        val cloudAuth = SecuritySessionRepository.fetchAuthenticatorConfigFromCloud(
+            context = context,
+            user = user
+        )
+        val cleanSecret = TotpAuthenticator.normalizeBase32(cloudAuth.secretBase32)
         val hasLoginAuthenticator = cloudAuth.enabled &&
             cloudAuth.requireOnLogin &&
-            TotpAuthenticator.isValidSecretBase32(cloudAuth.secretBase32)
+            TotpAuthenticator.isValidSecretBase32(cleanSecret)
 
-        if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+        return if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = rawEmail,
                 authenticatorEnabled = cloudAuth.enabled,
-                secretBase32 = cloudAuth.secretBase32,
+                secretBase32 = cleanSecret,
                 alreadyVerifiedForSession = alreadyVerified,
                 requireOnLogin = cloudAuth.requireOnLogin
             )
         ) {
-            emit(
-                AdminAuthorizationState.RequiresAuthenticator(
-                    email = rawEmail,
-                    secretBase32 = cloudAuth.secretBase32,
-                    authTimeSeconds = userAuthTimeSeconds
-                )
+            AdminAuthorizationState.RequiresAuthenticator(
+                email = rawEmail,
+                secretBase32 = cleanSecret,
+                authTimeSeconds = userAuthTimeSeconds
             )
-            return@flow
+        } else {
+            AdminAuthorizationState.Authorized(verifiedWithAuthenticator = hasLoginAuthenticator)
         }
+    }
 
-        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = hasLoginAuthenticator))
+    if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
+        emit(evaluateAuthorizedWithAuthenticator())
         return@flow
     }
 
@@ -200,7 +208,7 @@ fun observeAdminAuthorization(
     }.getOrDefault(false)
 
     if (firestoreAuthorized) {
-        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
+        emit(evaluateAuthorizedWithAuthenticator())
         return@flow
     }
 
@@ -214,7 +222,7 @@ fun observeAdminAuthorization(
     checkResult.fold(
         onSuccess = { isAuthorized ->
             if (isAuthorized) {
-                emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
+                emit(evaluateAuthorizedWithAuthenticator())
             } else {
                 // Record blocked unauthorized attempt to Firestore so the owner gets an instant
                 // push alert + "Grant Admin Access" notification!
@@ -408,7 +416,7 @@ fun UnauthorizedAdminScreen(
                     text = if (isNetworkError && !errorMessage.isNullOrBlank()) {
                         errorMessage
                     } else {
-                        "This account is not approved to view vehicles or access the Alif Car Import Admin Portal. Sign in with ${AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL} or ask the owner to approve your email under Admin Access."
+                        "This account is not approved to view vehicles or access the Alif Car Import Admin Portal. Sign in with an authorized admin email or ask the owner to approve your email under Admin Access."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

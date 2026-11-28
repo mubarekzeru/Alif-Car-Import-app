@@ -381,6 +381,11 @@ fun LotPulseApp(
                                 skipAutoSignIn = true
                                 passedAuthenticatorAuthTime = null
                                 LoginTwoFactorStore.clear(context)
+                            },
+                            onRequireAuthenticatorReverify = {
+                                passedAuthenticatorAuthTime = null
+                                LoginTwoFactorStore.clear(context)
+                                adminCheckTick++
                             }
                         )
                     }
@@ -469,7 +474,8 @@ private fun AuthenticatedLotAdmin(
     onConsumeNotificationTab: () -> Unit,
     requestedGrantEmail: String?,
     onConsumeGrantEmail: () -> Unit,
-    onWillSignOut: () -> Unit = {}
+    onWillSignOut: () -> Unit = {},
+    onRequireAuthenticatorReverify: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -592,6 +598,25 @@ private fun AuthenticatedLotAdmin(
     val isMutatingAuthenticator by portalViewModel.isMutatingAuthenticator.collectAsStateWithLifecycle()
     val websiteVisitorStats by portalViewModel.websiteVisitorStats.collectAsStateWithLifecycle()
     val isRefreshingVisitorStats by portalViewModel.isRefreshingVisitorStats.collectAsStateWithLifecycle()
+
+    // Live backstop: if Authenticator login code is enabled in Firestore and this login session
+    // was not yet verified with a 6-digit TOTP code, immediately lock behind the 2FA screen.
+    LaunchedEffect(
+        activeUser.uid,
+        verifiedWithAuthenticator,
+        authenticatorStatus.enabled,
+        authenticatorStatus.requireOnLogin
+    ) {
+        if (!verifiedWithAuthenticator &&
+            authenticatorStatus.enabled &&
+            authenticatorStatus.requireOnLogin
+        ) {
+            val sessionAlreadyVerified = portalViewModel.isCurrentSessionTwoFactorVerified(activeUser)
+            if (!sessionAlreadyVerified) {
+                onRequireAuthenticatorReverify()
+            }
+        }
+    }
 
     NavHost(
         navController = navController,

@@ -123,12 +123,12 @@ fun AuthenticatorSecurityCard(
                     Text(
                         text = if (status.enabled) {
                             if (status.requireOnLogin) {
-                                "6-digit Authenticator code is required to sign in with alifcarimports@gmail.com, remove active devices, change password, or disable 2FA"
+                                "6-digit Authenticator code is required to sign in to the Admin Portal, remove active devices, change password, or disable 2FA"
                             } else {
                                 "Active for removing devices, changing password, and disabling 2FA (login authentication code is currently disabled)"
                             }
                         } else {
-                            "Connect Google Authenticator to require a 6-digit code when signing in with alifcarimports@gmail.com and for sensitive security actions"
+                            "Connect Google Authenticator to require a 6-digit code when signing in to the Admin Portal and for sensitive security actions"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -173,7 +173,7 @@ fun AuthenticatorSecurityCard(
                                 shape = MaterialTheme.shapes.medium
                             ) {
                                 Text(
-                                    text = "Enable Google Authenticator so signing in with alifcarimports@gmail.com, removing active devices, signing out all devices, and changing your admin password require your live 6-digit code.",
+                                    text = "Enable Google Authenticator so signing in to the Admin Portal, removing active devices, signing out all devices, and changing your admin password require your live 6-digit code.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(10.dp)
@@ -477,7 +477,7 @@ fun AuthenticatorSecurityCard(
                         ) {
                             Text(
                                 text = if (status.requireOnLogin) {
-                                    "Protected (${status.accountLabel.ifBlank { "Admin" }}): Signing in with alifcarimports@gmail.com, removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code."
+                                    "Protected (${status.accountLabel.ifBlank { "Admin" }}): Signing in to the Admin Portal, removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA all require your live 6-digit Google Authenticator code."
                                 } else {
                                     "Protected (${status.accountLabel.ifBlank { "Admin" }}): Removing active devices, Remove All Other Devices, changing the admin password, and disabling 2FA require your 6-digit Google Authenticator code. Login authentication code is currently turned off."
                                 },
@@ -534,9 +534,9 @@ fun AuthenticatorSecurityCard(
                                         )
                                         Text(
                                             text = if (status.requireOnLogin) {
-                                                "Require a 6-digit Authenticator code when logging in with alifcarimports@gmail.com."
+                                                "Require a 6-digit Authenticator code when logging in to the Admin Portal."
                                             } else {
-                                                "Login with alifcarimports@gmail.com will not ask for a 6-digit code until enabled."
+                                                "Admin login will not ask for a 6-digit code until enabled."
                                             },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant

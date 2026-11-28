@@ -588,7 +588,7 @@ class PortalRepository(
     private fun friendlyException(e: Exception): Exception {
         return if (e is CloudflareApiException && e.isAuthOrPermissionError) {
             IllegalStateException(
-                "Admin access required: sign in with alifcarimports@gmail.com or an authorized admin account."
+                "Admin access required: sign in with an authorized admin account."
             )
         } else {
             e

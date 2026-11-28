@@ -813,7 +813,7 @@ fun CustomerInquiriesTabContent(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Website security rules restrict listing customer inquiries to alifcarimports@gmail.com.",
+                                text = "Website security rules restrict listing customer inquiries to the primary owner account.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

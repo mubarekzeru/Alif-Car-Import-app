@@ -201,6 +201,9 @@ class PortalViewModel(
         }
     }
 
+    suspend fun isCurrentSessionTwoFactorVerified(user: FirebaseUser): Boolean =
+        securityRepository.isCurrentSessionTwoFactorVerified(user)
+
     override fun onCleared() {
         super.onCleared()
         securityRepository.stopObservingCloudSecurity()

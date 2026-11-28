@@ -30,6 +30,7 @@ import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -373,9 +374,9 @@ class SecuritySessionRepository(
         // Sync active device session to Firestore so other devices & website see accurate device count
         upsertSessionInCloud(user = user, session = updatedSession)
 
-        // Pull latest cloud authenticator status into memory/prefs immediately
+        // Pull latest cloud authenticator status into memory/prefs immediately (with local-to-cloud reconciliation)
         runCatching {
-            val cloudAuth = fetchAuthenticatorConfigFromCloud(appContext)
+            val cloudAuth = fetchAuthenticatorConfigFromCloud(appContext, user)
             applyCloudAuthenticatorConfig(cloudAuth)
         }
 
@@ -774,12 +775,28 @@ class SecuritySessionRepository(
         failedTotpAttempts = 0
         totpLockoutUntilMillis = 0L
 
-        val sessionAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
+        val tokenAuthSeconds = runCatching {
+            user.getIdToken(false).await().authTimestamp
+        }.getOrDefault(0L)
+        val sessionAuthSeconds = tokenAuthSeconds.takeIf { it > 0L }
+            ?: (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
             ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
         if (sessionAuthSeconds > 0L) {
             LoginTwoFactorStore.markSessionVerified(appContext, user.uid, sessionAuthSeconds)
         }
         return Result.success("Google Authenticator enabled across all devices.")
+    }
+
+    suspend fun isCurrentSessionTwoFactorVerified(user: FirebaseUser): Boolean {
+        val tokenAuthSeconds = runCatching {
+            user.getIdToken(false).await().authTimestamp
+        }.getOrDefault(0L)
+        val cachedAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L } ?: 0L
+        val lastSignInSeconds = ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L).takeIf { it > 0L } ?: 0L
+        return listOf(tokenAuthSeconds, cachedAuthSeconds, lastSignInSeconds)
+            .filter { it > 0L }
+            .distinct()
+            .any { ts -> LoginTwoFactorStore.isSessionVerified(appContext, user.uid, ts) }
     }
 
     suspend fun disableAuthenticator(verificationCode: String): Result<String> {
@@ -1584,7 +1601,7 @@ class SecuritySessionRepository(
         fun readLocalAuthenticatorConfig(context: Context): LocalAuthenticatorConfig {
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val enabled = prefs.getBoolean(KEY_AUTH_ENABLED, false)
-            val secret = prefs.getString(KEY_AUTH_SECRET, "").orEmpty().trim()
+            val secret = TotpAuthenticator.normalizeBase32(prefs.getString(KEY_AUTH_SECRET, "").orEmpty())
             val effectiveEnabled = enabled && TotpAuthenticator.isValidSecretBase32(secret)
             val requireOnLogin = if (effectiveEnabled) {
                 prefs.getBoolean(KEY_AUTH_REQUIRE_ON_LOGIN, true)
@@ -1603,17 +1620,34 @@ class SecuritySessionRepository(
 
         /**
          * Fetches the authoritative 2FA config from Firestore (`config/authenticator`) with
-         * fallback to cache and local SharedPreferences, and mirrors the latest cloud value locally.
+         * token-propagation retry, local-to-cloud reconciliation (if 2FA was enabled locally
+         * while offline or on an older build), and offline fallback.
          */
-        suspend fun fetchAuthenticatorConfigFromCloud(context: Context): LocalAuthenticatorConfig {
+        suspend fun fetchAuthenticatorConfigFromCloud(
+            context: Context,
+            user: FirebaseUser? = Firebase.auth.currentUser
+        ): LocalAuthenticatorConfig {
+            val local = readLocalAuthenticatorConfig(context)
             val db = FirestoreProvider.get(context)
-            val doc = runCatching {
+
+            suspend fun tryFetchServer(): DocumentSnapshot? = runCatching {
                 db.collection(COLLECTION_CONFIG)
                     .document(DOC_AUTHENTICATOR)
                     .get(Source.SERVER)
                     .await()
-            }.getOrElse {
-                runCatching {
+            }.onFailure { err ->
+                Log.w(TAG, "config/authenticator SERVER fetch attempt failed: ${err.localizedMessage}")
+            }.getOrNull()
+
+            var doc = tryFetchServer()
+            if (doc == null) {
+                // Retry once after refreshing token in case Firestore SDK hadn't picked up the fresh login token yet
+                runCatching { user?.getIdToken(true)?.await() }
+                delay(350L)
+                doc = tryFetchServer()
+            }
+            if (doc == null) {
+                doc = runCatching {
                     db.collection(COLLECTION_CONFIG)
                         .document(DOC_AUTHENTICATOR)
                         .get()
@@ -1623,10 +1657,52 @@ class SecuritySessionRepository(
 
             if (doc != null && doc.exists()) {
                 val parsed = parseAuthenticatorDoc(doc)
+                // If user enabled 2FA locally more recently than a stale disabled cloud doc, push local up to cloud
+                if (local.enabled &&
+                    !parsed.enabled &&
+                    TotpAuthenticator.isValidSecretBase32(local.secretBase32) &&
+                    local.updatedAtMillis > parsed.updatedAtMillis
+                ) {
+                    pushLocalAuthenticatorToCloud(db, local, user)
+                    return local
+                }
                 persistLocalAuthenticator(context, parsed)
                 return parsed
             }
-            return readLocalAuthenticatorConfig(context)
+
+            // If cloud doc doesn't exist yet but local 2FA is enabled, sync local up to Firestore
+            if (local.enabled && TotpAuthenticator.isValidSecretBase32(local.secretBase32)) {
+                pushLocalAuthenticatorToCloud(db, local, user)
+            }
+            return local
+        }
+
+        private suspend fun pushLocalAuthenticatorToCloud(
+            db: FirebaseFirestore,
+            local: LocalAuthenticatorConfig,
+            user: FirebaseUser?
+        ) {
+            val cleanSecret = TotpAuthenticator.normalizeBase32(local.secretBase32)
+            if (!TotpAuthenticator.isValidSecretBase32(cleanSecret)) return
+            val email = local.updatedByEmail.ifBlank { user?.email.orEmpty().trim() }.take(254)
+            val label = local.accountLabel.ifBlank { email }.take(254)
+            val payload = mapOf(
+                "enabled" to true,
+                "requireOnLogin" to local.requireOnLogin,
+                "secretBase32" to cleanSecret,
+                "accountLabel" to label,
+                "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+                "updatedByEmail" to email,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            runCatching {
+                db.collection(COLLECTION_CONFIG)
+                    .document(DOC_AUTHENTICATOR)
+                    .set(payload)
+                    .await()
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to reconcile local authenticator to Firestore: ${err.localizedMessage}")
+            }
         }
 
         /**
@@ -1673,7 +1749,7 @@ class SecuritySessionRepository(
 
         fun parseAuthenticatorDoc(doc: DocumentSnapshot): LocalAuthenticatorConfig {
             val enabled = doc.getBoolean("enabled") ?: false
-            val secret = doc.getString("secretBase32").orEmpty().trim()
+            val secret = TotpAuthenticator.normalizeBase32(doc.getString("secretBase32").orEmpty())
             val effectiveEnabled = enabled && TotpAuthenticator.isValidSecretBase32(secret)
             val requireOnLogin = if (effectiveEnabled) {
                 if (doc.contains("requireOnLogin")) {

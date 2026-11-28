@@ -668,10 +668,20 @@ class ExampleUnitTest {
                 requireOnLogin = true
             )
         )
-        // Different admin email -> does not trigger owner-only 2FA challenge
-        assertFalse(
+        // Any authorized admin email MUST also trigger 2FA challenge when enabled & requireOnLogin = true
+        assertTrue(
             com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = "staff@alifcarimport.com",
+                authenticatorEnabled = true,
+                secretBase32 = "gezd gnbv gy3t qojq gezd gnbv gy3t qojq",
+                alreadyVerifiedForSession = false,
+                requireOnLogin = true
+            )
+        )
+        // Blank email -> no challenge
+        assertFalse(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "   ",
                 authenticatorEnabled = true,
                 secretBase32 = validSecret,
                 alreadyVerifiedForSession = false

@@ -172,7 +172,7 @@ fun AdminAccessScreen(
 
                     AdminAccessState.PermissionDenied -> {
                         Text(
-                            text = "Sign in with ${AdminAccessConfig.BOOTSTRAP_OWNER_EMAIL} or an authorized admin account to view and edit shared admin emails.",
+                            text = "Sign in with an authorized admin account to view and edit shared admin emails.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -196,7 +196,7 @@ fun AdminAccessScreen(
                                 value = newEmailInput,
                                 onValueChange = { if (it.length <= 254) newEmailInput = it },
                                 label = { Text("Add admin email") },
-                                placeholder = { Text("partner@gmail.com") },
+                                placeholder = { Text("Enter email") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                                 modifier = Modifier

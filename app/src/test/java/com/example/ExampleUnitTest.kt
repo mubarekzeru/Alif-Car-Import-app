@@ -884,4 +884,20 @@ class ExampleUnitTest {
             com.example.data.model.LoginSecurityAlert.findCurrentStatusAlertId(alerts, "")
         )
     }
+
+    @Test
+    fun cloudflareWorkerMediaUrls_resolveCleanlyForAppAndWebsiteSync() {
+        assertEquals(
+            "https://alif-car-import-api.alifcarimports.workers.dev/api/media/cars/byd-leopard-5.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("/api/media/cars/byd-leopard-5.jpg")
+        )
+        assertEquals(
+            "https://alif-car-import-api.alifcarimports.workers.dev/media/vehicles/unit1.webp",
+            com.example.ui.components.normalizeWebsiteImageUrl("/media/vehicles/unit1.webp")
+        )
+        assertEquals(
+            "https://alif-car-import-api.alifcarimports.workers.dev/r2/photo.jpg",
+            com.example.ui.components.normalizeWebsiteImageUrl("alif-car-import-api.alifcarimports.workers.dev/r2/photo.jpg")
+        )
+    }
 }

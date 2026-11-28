@@ -151,6 +151,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppImageLoader.install(applicationContext)
+        CloudflareApiClient.getShared(applicationContext)
         SecurityNotificationHelper.ensureChannels(this)
         handleNotificationIntent(intent)
         enableEdgeToEdge(
@@ -229,7 +230,9 @@ fun LotPulseApp(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
-    val apiClient = remember { CloudflareApiClient.getShared(auth) }
+    val apiClient = remember(context, auth) {
+        CloudflareApiClient.getShared(context.applicationContext, auth)
+    }
 
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var authRefreshTick by remember { mutableIntStateOf(0) }
@@ -476,8 +479,11 @@ private fun AuthenticatedLotAdmin(
         key = currentUserId,
         factory = viewModelFactory {
             initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
                 InventoryViewModel(
-                    repository = VehicleRepository(CloudflareApiClient.getShared())
+                    repository = VehicleRepository(CloudflareApiClient.getShared(app.applicationContext))
                 )
             }
         }
@@ -494,7 +500,7 @@ private fun AuthenticatedLotAdmin(
                     appContext = app.applicationContext,
                     repository = PortalRepository(
                         context = app.applicationContext,
-                        apiClient = CloudflareApiClient.getShared()
+                        apiClient = CloudflareApiClient.getShared(app.applicationContext)
                     ),
                     securityRepository = SecuritySessionRepository(app.applicationContext)
                 )
@@ -508,6 +514,14 @@ private fun AuthenticatedLotAdmin(
             verifiedWithAuthenticator = verifiedWithAuthenticator
         )
         AdminAlertMonitorService.startIfEnabled(context)
+    }
+
+    // Periodically sync website inventory & photos into the app's local cache while in foreground
+    LaunchedEffect(activeUser.uid) {
+        while (true) {
+            delay(45_000L)
+            viewModel.refreshVehicles(showFeedback = false)
+        }
     }
 
     LaunchedEffect(requestedNotificationTab) {

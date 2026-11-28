@@ -1,12 +1,15 @@
 package com.example.data.network
 
+import android.content.Context
 import android.util.Log
+import com.example.data.cache.ShowroomDiskCache
 import com.example.data.model.BrandingConfig
 import com.example.data.model.ContactConfig
 import com.example.data.model.CustomerInquiry
 import com.example.data.model.HeroConfig
 import com.example.data.model.LoginSecurityAlert
 import com.example.data.model.PageVisitRecord
+import com.example.ui.components.AppImageLoader
 import com.example.data.model.ShowroomConfig
 import com.example.data.model.TikTokPost
 import com.example.data.model.TikTokSectionConfig
@@ -79,6 +82,31 @@ class CloudflareApiClient(
     @Volatile
     private var lastShowroomFetchMillis: Long = 0L
 
+    @Volatile
+    private var appContext: Context? = null
+
+    @Volatile
+    private var diskCache: ShowroomDiskCache? = null
+
+    fun attachContext(context: Context) {
+        val ctx = context.applicationContext
+        if (appContext != null) return
+        synchronized(this) {
+            if (appContext != null) return
+            appContext = ctx
+            val cache = ShowroomDiskCache(ctx)
+            diskCache = cache
+            if (_showroomState.value !is ShowroomLoadState.Loaded) {
+                val cached = cache.load()
+                if (cached != null) {
+                    _showroomState.value = ShowroomLoadState.Loaded(cached.payload)
+                    // Keep lastShowroomFetchMillis = 0L so the first online check still syncs fresh website data
+                    prefetchShowroomImages(cached.payload)
+                }
+            }
+        }
+    }
+
     fun currentVehicles(): List<Vehicle> =
         (_showroomState.value as? ShowroomLoadState.Loaded)?.payload?.vehicles.orEmpty()
 
@@ -93,6 +121,7 @@ class CloudflareApiClient(
         val now = System.currentTimeMillis()
         if (!forceRefresh &&
             current is ShowroomLoadState.Loaded &&
+            lastShowroomFetchMillis > 0L &&
             (now - lastShowroomFetchMillis) < MIN_AUTO_REFRESH_INTERVAL_MILLIS
         ) {
             return Result.success(current.payload)
@@ -102,14 +131,14 @@ class CloudflareApiClient(
             val lockedNow = System.currentTimeMillis()
             if (!forceRefresh &&
                 latest is ShowroomLoadState.Loaded &&
+                lastShowroomFetchMillis > 0L &&
                 (lockedNow - lastShowroomFetchMillis) < MIN_AUTO_REFRESH_INTERVAL_MILLIS
             ) {
                 return@withLock Result.success(latest.payload)
             }
             try {
                 val payload = fetchShowroom()
-                _showroomState.value = ShowroomLoadState.Loaded(payload)
-                lastShowroomFetchMillis = System.currentTimeMillis()
+                publishAndCachePayload(payload, markNetworkSynced = true)
                 Result.success(payload)
             } catch (e: CancellationException) {
                 throw e
@@ -122,6 +151,32 @@ class CloudflareApiClient(
                 }
                 Result.failure(e)
             }
+        }
+    }
+
+    private fun publishAndCachePayload(
+        payload: ShowroomPayload,
+        markNetworkSynced: Boolean
+    ) {
+        _showroomState.value = ShowroomLoadState.Loaded(payload)
+        if (markNetworkSynced) {
+            lastShowroomFetchMillis = System.currentTimeMillis()
+        }
+        diskCache?.save(payload)
+        prefetchShowroomImages(payload)
+    }
+
+    private fun prefetchShowroomImages(payload: ShowroomPayload) {
+        val ctx = appContext ?: return
+        val extras = buildList {
+            if (payload.config.branding.logoUrl.isNotBlank()) add(payload.config.branding.logoUrl)
+            if (payload.config.hero.imageUrl.isNotBlank()) add(payload.config.hero.imageUrl)
+            payload.tiktokPosts.forEach { post ->
+                if (post.coverImageUrl.isNotBlank()) add(post.coverImageUrl)
+            }
+        }
+        runCatching {
+            AppImageLoader.prefetchVehiclePhotos(ctx, payload.vehicles, extras)
         }
     }
 
@@ -138,44 +193,54 @@ class CloudflareApiClient(
 
     suspend fun putVehicle(vehicleId: String, payloadJson: JSONObject): Vehicle? {
         require(vehicleId.isNotBlank() && vehicleId.length <= 160) { "Invalid vehicle ID." }
-        val url = buildUrl("api", "admin", "vehicles", vehicleId.trim())
+        val cleanId = vehicleId.trim()
+        val url = buildUrl("api", "admin", "vehicles", cleanId)
         val rawBody = executeRequest(
             method = "PUT",
             url = url,
             bodyJson = payloadJson,
             requiresAdminAuth = true
         )
-        val parsed = parseSingleVehicleResponse(rawBody, fallbackId = vehicleId.trim())
+        val parsed = parseSingleVehicleResponse(rawBody, fallbackId = cleanId)
+            ?: parseVehicleObject(payloadJson, fallbackId = cleanId)
         if (parsed != null) {
             upsertCachedVehicle(parsed)
         }
-        // Sync authoritative state from Worker (including R2 HTTPS URLs)
-        runCatching { ensureShowroomLoaded(forceRefresh = true) }
-        return parsed
+        // Sync authoritative state from Worker (including R2 HTTPS URLs) and update disk + image cache
+        val refreshed = runCatching { ensureShowroomLoaded(forceRefresh = true).getOrNull() }.getOrNull()
+        val authoritative = refreshed?.vehicles?.firstOrNull { it.id == cleanId }
+        if (authoritative == null && parsed != null) {
+            // Preserve the just-published vehicle in local cache if edge propagation is momentarily lagging
+            upsertCachedVehicle(parsed)
+        }
+        return authoritative ?: parsed
     }
 
     suspend fun deleteVehicle(vehicleId: String) {
         require(vehicleId.isNotBlank() && vehicleId.length <= 160) { "Invalid vehicle ID." }
-        val url = buildUrl("api", "admin", "vehicles", vehicleId.trim())
+        val cleanId = vehicleId.trim()
+        val url = buildUrl("api", "admin", "vehicles", cleanId)
         executeRequest(
             method = "DELETE",
             url = url,
             bodyJson = null,
             requiresAdminAuth = true
         )
-        removeCachedVehicle(vehicleId.trim())
+        removeCachedVehicle(cleanId)
     }
 
     suspend fun putTikTokPost(postId: String, payloadJson: JSONObject): TikTokPost? {
         require(postId.isNotBlank() && postId.length <= 160) { "Invalid TikTok post ID." }
-        val url = buildUrl("api", "admin", "tiktok", postId.trim())
+        val cleanId = postId.trim()
+        val url = buildUrl("api", "admin", "tiktok", cleanId)
         val rawBody = executeRequest(
             method = "PUT",
             url = url,
             bodyJson = payloadJson,
             requiresAdminAuth = true
         )
-        val parsed = parseSingleTikTokResponse(rawBody, fallbackId = postId.trim())
+        val parsed = parseSingleTikTokResponse(rawBody, fallbackId = cleanId)
+            ?: parseTikTokPostObject(payloadJson, fallbackId = cleanId)
         if (parsed != null) {
             upsertCachedTikTokPost(parsed)
         }
@@ -185,14 +250,15 @@ class CloudflareApiClient(
 
     suspend fun deleteTikTokPost(postId: String) {
         require(postId.isNotBlank() && postId.length <= 160) { "Invalid TikTok post ID." }
-        val url = buildUrl("api", "admin", "tiktok", postId.trim())
+        val cleanId = postId.trim()
+        val url = buildUrl("api", "admin", "tiktok", cleanId)
         executeRequest(
             method = "DELETE",
             url = url,
             bodyJson = null,
             requiresAdminAuth = true
         )
-        removeCachedTikTokPost(postId.trim())
+        removeCachedTikTokPost(cleanId)
     }
 
     suspend fun putConfig(config: ShowroomConfig, payloadJson: JSONObject) {
@@ -257,55 +323,54 @@ class CloudflareApiClient(
     }
 
     private fun upsertCachedVehicle(vehicle: Vehicle) {
-        val current = _showroomState.value
-        if (current is ShowroomLoadState.Loaded) {
-            val updatedList = current.payload.vehicles.filterNot { it.id == vehicle.id } + vehicle
-            _showroomState.value = ShowroomLoadState.Loaded(
-                current.payload.copy(vehicles = updatedList)
-            )
-        }
+        val basePayload = (_showroomState.value as? ShowroomLoadState.Loaded)?.payload ?: ShowroomPayload()
+        val updatedList = basePayload.vehicles.filterNot { it.id == vehicle.id } + vehicle
+        publishAndCachePayload(
+            payload = basePayload.copy(vehicles = updatedList),
+            markNetworkSynced = false
+        )
     }
 
     private fun removeCachedVehicle(vehicleId: String) {
         val current = _showroomState.value
         if (current is ShowroomLoadState.Loaded) {
-            _showroomState.value = ShowroomLoadState.Loaded(
-                current.payload.copy(
+            publishAndCachePayload(
+                payload = current.payload.copy(
                     vehicles = current.payload.vehicles.filterNot { it.id == vehicleId }
-                )
+                ),
+                markNetworkSynced = false
             )
         }
     }
 
     private fun upsertCachedTikTokPost(post: TikTokPost) {
-        val current = _showroomState.value
-        if (current is ShowroomLoadState.Loaded) {
-            val updatedList = (current.payload.tiktokPosts.filterNot { it.id == post.id } + post)
-                .sortedWith(compareBy<TikTokPost> { it.sortOrder }.thenBy { it.title.lowercase(Locale.US) })
-            _showroomState.value = ShowroomLoadState.Loaded(
-                current.payload.copy(tiktokPosts = updatedList)
-            )
-        }
+        val basePayload = (_showroomState.value as? ShowroomLoadState.Loaded)?.payload ?: ShowroomPayload()
+        val updatedList = (basePayload.tiktokPosts.filterNot { it.id == post.id } + post)
+            .sortedWith(compareBy<TikTokPost> { it.sortOrder }.thenBy { it.title.lowercase(Locale.US) })
+        publishAndCachePayload(
+            payload = basePayload.copy(tiktokPosts = updatedList),
+            markNetworkSynced = false
+        )
     }
 
     private fun removeCachedTikTokPost(postId: String) {
         val current = _showroomState.value
         if (current is ShowroomLoadState.Loaded) {
-            _showroomState.value = ShowroomLoadState.Loaded(
-                current.payload.copy(
+            publishAndCachePayload(
+                payload = current.payload.copy(
                     tiktokPosts = current.payload.tiktokPosts.filterNot { it.id == postId }
-                )
+                ),
+                markNetworkSynced = false
             )
         }
     }
 
     private fun updateCachedConfig(config: ShowroomConfig) {
-        val current = _showroomState.value
-        if (current is ShowroomLoadState.Loaded) {
-            _showroomState.value = ShowroomLoadState.Loaded(
-                current.payload.copy(config = config)
-            )
-        }
+        val basePayload = (_showroomState.value as? ShowroomLoadState.Loaded)?.payload ?: ShowroomPayload()
+        publishAndCachePayload(
+            payload = basePayload.copy(config = config),
+            markNetworkSynced = false
+        )
     }
 
     private fun buildUrl(vararg segments: String): HttpUrl {
@@ -374,6 +439,8 @@ class CloudflareApiClient(
             .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "AlifCarImportAdmin/1.0")
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
 
         // Strictly scope Authorization header to the exact API host and /api/admin/* paths
         if (!bearerToken.isNullOrBlank() &&
@@ -425,10 +492,17 @@ class CloudflareApiClient(
         @Volatile
         private var sharedInstance: CloudflareApiClient? = null
 
-        fun getShared(auth: FirebaseAuth = Firebase.auth): CloudflareApiClient {
-            return sharedInstance ?: synchronized(this) {
+        fun getShared(
+            context: Context? = null,
+            auth: FirebaseAuth = Firebase.auth
+        ): CloudflareApiClient {
+            val instance = sharedInstance ?: synchronized(this) {
                 sharedInstance ?: CloudflareApiClient(auth = auth).also { sharedInstance = it }
             }
+            if (context != null) {
+                instance.attachContext(context)
+            }
+            return instance
         }
 
         private fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

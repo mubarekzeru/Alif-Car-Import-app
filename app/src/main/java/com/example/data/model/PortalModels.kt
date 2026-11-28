@@ -132,7 +132,22 @@ data class TikTokPost(
     val coverImageUrl: String = "",
     val sortOrder: Long = 0L,
     val updatedAt: Timestamp? = null
-)
+) {
+    fun toApiJson(): JSONObject = JSONObject().apply {
+        put("id", id.trim())
+        put("title", title.trim().take(200))
+        put("caption", caption.trim().take(2000))
+        put("tiktokUrl", tiktokUrl.trim().take(500))
+        put("coverImageUrl", coverImageUrl.trim().take(VehicleDraft.MAX_IMAGE_FIELD_LENGTH))
+        put("sortOrder", sortOrder.coerceIn(0L, 1000L))
+        val updatedIso = updatedAt?.toDate()?.let { date ->
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(date)
+        } ?: VehicleDraft.currentIsoTimestamp()
+        put("updatedAt", updatedIso)
+    }
+}
 
 data class TikTokPostDraft(
     val title: String,

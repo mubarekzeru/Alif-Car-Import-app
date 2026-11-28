@@ -364,7 +364,7 @@ fun AddEditVehicleScreen(
                         }
                         Text(
                             text = if (hasPickedDataUrl) {
-                                "Photo compressed for web & mobile sync."
+                                "Photo ready — uploads to website & caches in app."
                             } else {
                                 "Pick a photo from your device or paste an image URL."
                             },
@@ -377,7 +377,7 @@ fun AddEditVehicleScreen(
                 if (!hasPickedDataUrl) {
                     OutlinedTextField(
                         value = imageUrlInput,
-                        onValueChange = { if (it.length <= 550_000) imageUrlInput = it },
+                        onValueChange = { if (it.length <= 800_000) imageUrlInput = it },
                         label = { Text("Image URL") },
                         placeholder = { Text("https://…") },
                         singleLine = true,

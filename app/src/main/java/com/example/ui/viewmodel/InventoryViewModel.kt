@@ -7,9 +7,9 @@ import com.example.data.firebase.VehicleRepository
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleDraft
 import com.example.data.model.VehicleStatus
+import com.example.data.network.ShowroomLoadState
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface InventoryUiState {
     data object Loading : InventoryUiState
@@ -71,6 +70,9 @@ class InventoryViewModel(
     private val _isMutating = MutableStateFlow(false)
     val isMutating: StateFlow<Boolean> = _isMutating.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
 
@@ -80,19 +82,26 @@ class InventoryViewModel(
     private val _deleteCandidate = MutableStateFlow<Vehicle?>(null)
     val deleteCandidate: StateFlow<Vehicle?> = _deleteCandidate.asStateFlow()
 
-    private val vehiclesStream = repository.observeVehicles()
+    private val showroomStream = repository.observeShowroomState()
 
     val uiState: StateFlow<InventoryUiState> = combine(
-        vehiclesStream,
+        showroomStream,
         _filterState
-    ) { vehicles, filters ->
-        val metrics = computeLotMetrics(vehicles)
-        val filtered = applyFiltersAndSort(vehicles, filters)
-        InventoryUiState.Success(
-            allVehicles = vehicles,
-            filteredVehicles = filtered,
-            metrics = metrics
-        ) as InventoryUiState
+    ) { state, filters ->
+        when (state) {
+            ShowroomLoadState.Loading -> InventoryUiState.Loading
+            is ShowroomLoadState.Error -> InventoryUiState.Error(state.message)
+            is ShowroomLoadState.Loaded -> {
+                val vehicles = state.payload.vehicles
+                val metrics = computeLotMetrics(vehicles)
+                val filtered = applyFiltersAndSort(vehicles, filters)
+                InventoryUiState.Success(
+                    allVehicles = vehicles,
+                    filteredVehicles = filtered,
+                    metrics = metrics
+                )
+            }
+        }
     }.catch { error ->
         if (error is CancellationException) throw error
         Log.w(TAG, "Error observing vehicles", error)
@@ -103,9 +112,20 @@ class InventoryViewModel(
         initialValue = InventoryUiState.Loading
     )
 
-    fun refreshVehicles() {
+    fun refreshVehicles(showFeedback: Boolean = false) {
+        if (_isRefreshing.value) return
         viewModelScope.launch {
-            repository.refreshVehicles()
+            _isRefreshing.value = true
+            val result = repository.refreshVehicles()
+            _isRefreshing.value = false
+            if (showFeedback) {
+                result.onSuccess { list ->
+                    _snackbarMessage.value = "Synced ${list.size} car(s) with website & updated app cache"
+                }.onFailure { err ->
+                    _snackbarMessage.value = err.localizedMessage
+                        ?: "Offline — showing cached cars stored in app"
+                }
+            }
         }
     }
 
@@ -206,41 +226,22 @@ class InventoryViewModel(
 
         viewModelScope.launch {
             _isMutating.value = true
-            val writeDeferred = async {
-                if (editingVehicleId == null) {
-                    repository.addVehicle(draft).map { }
-                } else {
-                    repository.updateVehicle(editingVehicleId, draft)
-                }
-            }
-            val fastResult = withTimeoutOrNull(FAST_PUBLISH_GRACE_MILLIS) {
-                writeDeferred.await()
+            val result = if (editingVehicleId == null) {
+                repository.addVehicle(draft).map { }
+            } else {
+                repository.updateVehicle(editingVehicleId, draft)
             }
             _isMutating.value = false
 
-            if (fastResult != null) {
-                fastResult.onSuccess {
-                    _snackbarMessage.value = if (editingVehicleId == null) {
-                        "Published $summaryName"
-                    } else {
-                        "Saved changes to $summaryName"
-                    }
-                    onSuccess()
-                }.onFailure { err ->
-                    _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
-                }
-            } else {
+            result.onSuccess {
                 _snackbarMessage.value = if (editingVehicleId == null) {
-                    "Posted $summaryName — syncing to website"
+                    "Published $summaryName to website & cached in app"
                 } else {
-                    "Saved $summaryName — syncing to website"
+                    "Updated $summaryName on website & cached in app"
                 }
                 onSuccess()
-                launch {
-                    writeDeferred.await().onFailure { err ->
-                        _snackbarMessage.value = err.localizedMessage ?: "Sync error while saving $summaryName"
-                    }
-                }
+            }.onFailure { err ->
+                _snackbarMessage.value = err.localizedMessage ?: "Unable to save vehicle"
             }
         }
     }
@@ -324,6 +325,5 @@ class InventoryViewModel(
     private companion object {
         const val TAG = "InventoryVM"
         const val STOP_TIMEOUT_MILLIS = 5000L
-        const val FAST_PUBLISH_GRACE_MILLIS = 600L
     }
 }

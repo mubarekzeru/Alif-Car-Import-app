@@ -3,19 +3,23 @@ package com.example.ui.components
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
 import android.util.LruCache
 import androidx.compose.ui.graphics.Color
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
+import com.example.data.network.CloudflareApiClient
 import com.example.ui.theme.AmberReserved
 import com.example.ui.theme.AmberReservedContainer
 import com.example.ui.theme.EmeraldAvailable
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.SlateSold
 import com.example.ui.theme.SlateSoldContainer
-import coil.request.ImageRequest
 import com.google.firebase.Timestamp
 import java.io.ByteArrayOutputStream
 import java.net.URLDecoder
@@ -62,6 +66,7 @@ fun formatEpochMillis(millis: Long): String {
 }
 
 private const val WEBSITE_BASE_URL = "https://alifcarimport.com"
+private const val CLOUDFLARE_API_BASE_URL = CloudflareApiClient.DEFAULT_BASE_URL
 private const val GITHUB_PAGES_ORIGIN = "https://mubarekzeru.github.io"
 private const val GITHUB_PAGES_BASE_URL = "https://mubarekzeru.github.io/AlifCarImport"
 private const val GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/mubarekzeru/AlifCarImport/main"
@@ -296,9 +301,10 @@ fun resolveCandidateImageUrls(imageUrl: String?): List<String> {
         return candidates
     }
 
-    // 8. Domain without scheme (e.g., mubarekzeru.github.io/..., alifcarimport.com/...)
+    // 8. Domain without scheme (e.g., alif-car-import-api.alifcarimports.workers.dev/..., alifcarimport.com/...)
     val lowerClean = cleaned.lowercase(Locale.US)
-    if (lowerClean.startsWith("alifcarimport.com/") ||
+    if (lowerClean.startsWith("alif-car-import-api.alifcarimports.workers.dev/") ||
+        lowerClean.startsWith("alifcarimport.com/") ||
         lowerClean.startsWith("www.alifcarimport.com/") ||
         lowerClean.startsWith("mubarekzeru.github.io/") ||
         lowerClean.startsWith("firebasestorage.googleapis.com/") ||
@@ -331,19 +337,29 @@ fun resolveCandidateImageUrls(imageUrl: String?): List<String> {
         return candidates
     }
 
-    if (relLower.startsWith("uploads/")) {
+    if (relLower.startsWith("api/") ||
+        relLower.startsWith("media/") ||
+        relLower.startsWith("r2/")
+    ) {
+        candidates.addUnique("$CLOUDFLARE_API_BASE_URL/$encodedRel")
         candidates.addUnique("$WEBSITE_BASE_URL/$encodedRel")
+        candidates.addUnique("$GITHUB_PAGES_BASE_URL/$encodedRel")
+    } else if (relLower.startsWith("uploads/")) {
+        candidates.addUnique("$WEBSITE_BASE_URL/$encodedRel")
+        candidates.addUnique("$CLOUDFLARE_API_BASE_URL/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_BASE_URL/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_ORIGIN/$encodedRel")
     } else {
         candidates.addUnique("$GITHUB_PAGES_BASE_URL/$encodedRel")
         candidates.addUnique("$WEBSITE_BASE_URL/$encodedRel")
+        candidates.addUnique("$CLOUDFLARE_API_BASE_URL/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_ORIGIN/$encodedRel")
     }
 
     // Bare image filename fallback folders (e.g. "song-plus.jpg")
     if (!encodedRel.contains('/')) {
         candidates.addUnique("$WEBSITE_BASE_URL/uploads/$encodedRel")
+        candidates.addUnique("$CLOUDFLARE_API_BASE_URL/api/media/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_BASE_URL/images/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_BASE_URL/cars/$encodedRel")
         candidates.addUnique("$GITHUB_PAGES_BASE_URL/uploads/$encodedRel")
@@ -441,8 +457,11 @@ fun buildAppImageRequest(
 ): ImageRequest {
     return ImageRequest.Builder(context)
         .data(data)
+        .memoryCachePolicy(CachePolicy.ENABLED)
+        .diskCachePolicy(CachePolicy.ENABLED)
         .apply {
             if (data is String && (data.startsWith("http://", true) || data.startsWith("https://", true))) {
+                diskCacheKey(data)
                 addHeader("User-Agent", BROWSER_USER_AGENT)
                 addHeader("Accept", "image/webp,image/png,image/jpeg,image/*;q=0.9,*/*;q=0.8")
                 val lower = data.lowercase(Locale.US)
@@ -470,10 +489,19 @@ fun buildAppImageRequest(
 fun encodePickedPhotoAsDataUrl(
     context: Context,
     uri: Uri,
-    maxDimension: Int = 800,
-    targetMaxBytes: Int = 120_000
+    maxDimension: Int = 1280,
+    targetMaxBytes: Int = 240_000
 ): String? {
     return try {
+        val orientation = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                ExifInterface(stream).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use { stream ->
             BitmapFactory.decodeStream(stream, null, bounds)
@@ -486,8 +514,9 @@ fun encodePickedPhotoAsDataUrl(
         val sampled = context.contentResolver.openInputStream(uri)?.use { stream ->
             BitmapFactory.decodeStream(stream, null, decodeOpts)
         } ?: return null
+        val upright = applyExifOrientation(sampled, orientation)
         compressBitmapToDataUrl(
-            bitmap = sampled,
+            bitmap = upright,
             maxDimension = maxDimension.toFloat(),
             targetMaxBytes = targetMaxBytes
         )
@@ -500,9 +529,34 @@ fun encodeGalleryPhotoAsDataUrl(context: Context, uri: Uri): String? =
     encodePickedPhotoAsDataUrl(
         context = context,
         uri = uri,
-        maxDimension = 640,
-        targetMaxBytes = 55_000
+        maxDimension = 1080,
+        targetMaxBytes = 160_000
     )
+
+private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+    val matrix = Matrix()
+    when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.postRotate(90f)
+            matrix.preScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.postRotate(270f)
+            matrix.preScale(-1f, 1f)
+        }
+        else -> return bitmap
+    }
+    return runCatching {
+        Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also { rotated ->
+            if (rotated !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+        }
+    }.getOrDefault(bitmap)
+}
 
 private fun calculateInSampleSize(width: Int, height: Int, reqSize: Int): Int {
     if (width <= 0 || height <= 0) return 1
@@ -516,8 +570,8 @@ private fun calculateInSampleSize(width: Int, height: Int, reqSize: Int): Int {
 
 private fun compressBitmapToDataUrl(
     bitmap: Bitmap,
-    maxDimension: Float = 800f,
-    targetMaxBytes: Int = 120_000
+    maxDimension: Float = 1280f,
+    targetMaxBytes: Int = 240_000
 ): String? {
     val scale = minOf(maxDimension / bitmap.width, maxDimension / bitmap.height, 1f)
     val scaled = if (scale < 1f) {
@@ -533,21 +587,21 @@ private fun compressBitmapToDataUrl(
         bitmap
     }
 
-    var quality = 74
+    var quality = 82
     var bytes: ByteArray
     val out = ByteArrayOutputStream(targetMaxBytes)
     do {
         out.reset()
         scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
         bytes = out.toByteArray()
-        quality -= 14
-    } while (bytes.size > targetMaxBytes && quality >= 32)
+        quality -= 10
+    } while (bytes.size > targetMaxBytes && quality >= 36)
 
     if (!scaled.isRecycled) scaled.recycle()
 
     val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
     val dataUrl = "data:image/jpeg;base64,$encoded"
-    return dataUrl.takeIf { it.length <= 540_000 }
+    return dataUrl.takeIf { it.length <= 800_000 }
 }
 
 data class StatusColors(

@@ -27,6 +27,15 @@ class VehicleRepository(
         }
     }
 
+    fun observeShowroomState(): Flow<ShowroomLoadState> = flow {
+        val initial = apiClient.showroomState.value
+        if (initial is ShowroomLoadState.Loaded) {
+            emit(initial)
+        }
+        apiClient.ensureShowroomLoaded(forceRefresh = false)
+        emitAll(apiClient.showroomState)
+    }
+
     fun observeVehicles(): Flow<List<Vehicle>> = flow {
         apiClient.ensureShowroomLoaded(forceRefresh = false)
         emitAll(

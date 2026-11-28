@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -151,6 +152,7 @@ fun DashboardScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val filterState by viewModel.filterState.collectAsStateWithLifecycle()
     val isMutating by viewModel.isMutating.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val selectedVehicleId by viewModel.selectedVehicleId.collectAsStateWithLifecycle()
     val deleteCandidate by viewModel.deleteCandidate.collectAsStateWithLifecycle()
@@ -295,8 +297,10 @@ fun DashboardScreen(
                         selectedVehicleId = selectedVehicleId,
                         sortMenuExpanded = sortMenuExpanded,
                         pendingAlertsCount = pendingAlertsCount,
+                        isRefreshing = isRefreshing,
                         brandDisplayName = brandDisplayName,
                         brandLogoCandidates = brandLogoCandidates,
+                        onRefreshInventory = { viewModel.refreshVehicles(showFeedback = true) },
                         onSearchQueryChange = viewModel::updateSearchQuery,
                         onToggleSortMenu = { sortMenuExpanded = it },
                         onSelectSortOrder = { order ->
@@ -496,8 +500,10 @@ private fun HomeDashboardTab(
     selectedVehicleId: String?,
     sortMenuExpanded: Boolean,
     pendingAlertsCount: Int,
+    isRefreshing: Boolean,
     brandDisplayName: String,
     brandLogoCandidates: List<String>,
+    onRefreshInventory: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onToggleSortMenu: (Boolean) -> Unit,
     onSelectSortOrder: (VehicleSortOrder) -> Unit,
@@ -577,6 +583,35 @@ private fun HomeDashboardTab(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Surface(
+                                color = Color.White,
+                                shape = CircleShape,
+                                shadowElevation = 3.dp
+                            ) {
+                                IconButton(
+                                    onClick = onRefreshInventory,
+                                    enabled = !isRefreshing,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .testTag("sync_inventory_button")
+                                ) {
+                                    if (isRefreshing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Sync cars with website",
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.size(21.dp)
+                                        )
+                                    }
+                                }
+                            }
+
                             Surface(
                                 color = Color.White,
                                 shape = CircleShape,
@@ -818,6 +853,14 @@ private fun HomeDashboardTab(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center
                                 )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Button(
+                                    onClick = onRefreshInventory,
+                                    enabled = !isRefreshing,
+                                    modifier = Modifier.testTag("retry_sync_inventory_button")
+                                ) {
+                                    Text(if (isRefreshing) "Syncing…" else "Retry Sync")
+                                }
                             }
                         }
                     }

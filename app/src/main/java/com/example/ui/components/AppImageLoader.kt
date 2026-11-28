@@ -14,6 +14,9 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import com.example.data.model.Vehicle
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -62,6 +65,8 @@ object AppImageLoader {
             ImageLoader.Builder(appContext)
                 .okHttpClient(client)
                 .respectCacheHeaders(false)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
                 .memoryCache {
                     MemoryCache.Builder(appContext)
                         .maxSizePercent(0.25)
@@ -69,12 +74,58 @@ object AppImageLoader {
                 }
                 .diskCache {
                     DiskCache.Builder()
-                        .directory(appContext.cacheDir.resolve("vehicle_image_cache"))
-                        .maxSizeBytes(100L * 1024L * 1024L)
+                        .directory(appContext.filesDir.resolve("vehicle_image_cache"))
+                        .maxSizeBytes(150L * 1024L * 1024L)
                         .build()
                 }
                 .crossfade(true)
                 .build()
+        }
+    }
+
+    /**
+     * Proactively caches primary and gallery photos of all synced vehicles into the app's
+     * persistent disk image cache so photos remain available instantaneously and offline.
+     */
+    fun prefetchVehiclePhotos(
+        context: Context,
+        vehicles: List<Vehicle>,
+        extraUrls: List<String> = emptyList()
+    ) {
+        val appContext = context.applicationContext
+        install(appContext)
+        val imageLoader = Coil.imageLoader(appContext)
+        val urlsToCache = LinkedHashSet<String>()
+
+        vehicles.forEach { vehicle ->
+            vehicle.resolvedPhotoSlots().forEach { slot ->
+                val primaryUrl = slot.firstOrNull()
+                if (primaryUrl != null &&
+                    (primaryUrl.startsWith("https://", ignoreCase = true) ||
+                        primaryUrl.startsWith("http://", ignoreCase = true))
+                ) {
+                    urlsToCache.add(primaryUrl)
+                }
+            }
+        }
+        extraUrls.forEach { raw ->
+            val resolved = normalizeWebsiteImageUrl(raw)
+            if (resolved != null &&
+                (resolved.startsWith("https://", ignoreCase = true) ||
+                    resolved.startsWith("http://", ignoreCase = true))
+            ) {
+                urlsToCache.add(resolved)
+            }
+        }
+
+        urlsToCache.forEach { url ->
+            val request = ImageRequest.Builder(appContext)
+                .data(url)
+                .diskCacheKey(url)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .memoryCachePolicy(CachePolicy.DISABLED)
+                .build()
+            imageLoader.enqueue(request)
         }
     }
 }

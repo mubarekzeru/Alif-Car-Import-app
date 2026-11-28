@@ -71,6 +71,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import coil.compose.AsyncImage
+import com.example.auth.AdminAuthorizationPolicy
 import com.example.auth.AdminAuthorizationState
 import com.example.auth.AdminVerificationLoadingScreen
 import com.example.auth.AuthScreen
@@ -599,15 +600,18 @@ private fun AuthenticatedLotAdmin(
     val websiteVisitorStats by portalViewModel.websiteVisitorStats.collectAsStateWithLifecycle()
     val isRefreshingVisitorStats by portalViewModel.isRefreshingVisitorStats.collectAsStateWithLifecycle()
 
-    // Live backstop: if Authenticator login code is enabled in Firestore and this login session
-    // was not yet verified with a 6-digit TOTP code, immediately lock behind the 2FA screen.
+    // Live backstop: if Authenticator login code is enabled in Firestore and this owner login
+    // session (alifcarimports@gmail.com) was not yet verified with a 6-digit TOTP code,
+    // immediately lock behind the 2FA screen. Other admin emails are never asked for 2FA on login.
     LaunchedEffect(
         activeUser.uid,
+        activeUser.email,
         verifiedWithAuthenticator,
         authenticatorStatus.enabled,
         authenticatorStatus.requireOnLogin
     ) {
-        if (!verifiedWithAuthenticator &&
+        if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(activeUser.email) &&
+            !verifiedWithAuthenticator &&
             authenticatorStatus.enabled &&
             authenticatorStatus.requireOnLogin
         ) {

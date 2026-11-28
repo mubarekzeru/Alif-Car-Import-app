@@ -208,7 +208,7 @@ fun observeAdminAuthorization(
     }.getOrDefault(false)
 
     if (firestoreAuthorized) {
-        emit(evaluateAuthorizedWithAuthenticator())
+        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
         return@flow
     }
 
@@ -222,7 +222,7 @@ fun observeAdminAuthorization(
     checkResult.fold(
         onSuccess = { isAuthorized ->
             if (isAuthorized) {
-                emit(evaluateAuthorizedWithAuthenticator())
+                emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
             } else {
                 // Record blocked unauthorized attempt to Firestore so the owner gets an instant
                 // push alert + "Grant Admin Access" notification!

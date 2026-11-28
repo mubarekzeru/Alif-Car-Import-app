@@ -668,12 +668,22 @@ class ExampleUnitTest {
                 requireOnLogin = true
             )
         )
-        // Any authorized admin email MUST also trigger 2FA challenge when enabled & requireOnLogin = true
+        // Owner email with spaced/lowercase Base32 secret -> still requires 2FA challenge
         assertTrue(
+            com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
+                userEmail = "alifcarimports@gmail.com",
+                authenticatorEnabled = true,
+                secretBase32 = "gezd gnbv gy3t qojq gezd gnbv gy3t qojq",
+                alreadyVerifiedForSession = false,
+                requireOnLogin = true
+            )
+        )
+        // Other admin emails -> MUST NOT trigger login 2FA challenge
+        assertFalse(
             com.example.auth.LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = "staff@alifcarimport.com",
                 authenticatorEnabled = true,
-                secretBase32 = "gezd gnbv gy3t qojq gezd gnbv gy3t qojq",
+                secretBase32 = validSecret,
                 alreadyVerifiedForSession = false,
                 requireOnLogin = true
             )

@@ -68,7 +68,7 @@ object LoginAuthenticatorPolicy {
         alreadyVerifiedForSession: Boolean,
         requireOnLogin: Boolean = true
     ): Boolean {
-        if (userEmail.isNullOrBlank()) return false
+        if (!AdminAuthorizationPolicy.isBootstrapOwnerEmail(userEmail)) return false
         if (!authenticatorEnabled || !requireOnLogin) return false
         val cleanSecret = TotpAuthenticator.normalizeBase32(secretBase32)
         if (!TotpAuthenticator.isValidSecretBase32(cleanSecret)) return false

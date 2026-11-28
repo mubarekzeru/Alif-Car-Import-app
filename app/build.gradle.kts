@@ -17,8 +17,8 @@ android {
     minSdk = 24
     targetSdk = 36
     val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-    versionCode = if (ciRunNumber != null && ciRunNumber > 0) ciRunNumber + 1 else 2
-    versionName = if (ciRunNumber != null && ciRunNumber > 0) "1.0.$ciRunNumber" else "1.0.1"
+    versionCode = if (ciRunNumber != null && ciRunNumber > 0) ciRunNumber + 100 else 100
+    versionName = if (ciRunNumber != null && ciRunNumber > 0) "1.1.$ciRunNumber" else "1.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

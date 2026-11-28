@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -59,6 +60,7 @@ fun SettingsTabContent(
     vehicles: List<Vehicle>,
     tikTokPosts: List<TikTokPost>,
     tikTokHandle: String,
+    tikTokProfileUrl: String = "",
     onSelectSection: (DashboardSection) -> Unit,
     onOpenVehicleDetail: (Vehicle) -> Unit,
     onOpenEditVehicle: (Vehicle) -> Unit,
@@ -71,8 +73,8 @@ fun SettingsTabContent(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var sectionMenuExpanded by remember { mutableStateOf(false) }
-    var selectedTikTokDetail by remember { mutableStateOf<TikTokPost?>(null) }
     val listState = rememberLazyListState()
 
     BoxWithConstraints(
@@ -280,7 +282,14 @@ fun SettingsTabContent(
                             rowPosts.forEach { post ->
                                 TikTokInstagramGridCard(
                                     post = post,
-                                    onCardClick = { selectedTikTokDetail = post },
+                                    onCardClick = {
+                                        TikTokAppLauncher.openInTikTokApp(
+                                            context = context,
+                                            videoUrl = post.tiktokUrl,
+                                            fallbackProfileUrl = tikTokProfileUrl,
+                                            fallbackHandle = tikTokHandle
+                                        )
+                                    },
                                     onEditClick = { onOpenEditTikTok(post) },
                                     onDeleteClick = { onDeleteTikTok(post) },
                                     modifier = Modifier.weight(1f)
@@ -294,22 +303,5 @@ fun SettingsTabContent(
                 }
             }
         }
-    }
-
-    // Expanded TikTok Video Detail Modal when tapped
-    selectedTikTokDetail?.let { post ->
-        TikTokPostDetailDialog(
-            post = post,
-            handle = tikTokHandle,
-            onDismiss = { selectedTikTokDetail = null },
-            onEditClick = {
-                selectedTikTokDetail = null
-                onOpenEditTikTok(post)
-            },
-            onDeleteClick = {
-                selectedTikTokDetail = null
-                onDeleteTikTok(post)
-            }
-        )
     }
 }

@@ -249,7 +249,7 @@ fun LotPulseApp(
     val verifiedUser = remember(user, authRefreshTick) {
         user?.takeIf { isUserVerified(it) }
     }
-    var passedAuthenticatorAuthTime by remember(verifiedUser?.uid) {
+    var passedAuthenticatorAuthTime by remember(verifiedUser?.uid, authRefreshTick) {
         mutableStateOf<Long?>(null)
     }
 
@@ -313,7 +313,9 @@ fun LotPulseApp(
             AppRootStage.AUTH -> AuthScreen(
                 onAuthSuccess = {
                     skipAutoSignIn = false
+                    passedAuthenticatorAuthTime = null
                     authRefreshTick++
+                    adminCheckTick++
                 },
                 skipAutoSignIn = skipAutoSignIn
             )

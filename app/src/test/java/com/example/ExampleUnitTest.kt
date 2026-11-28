@@ -900,4 +900,91 @@ class ExampleUnitTest {
             com.example.ui.components.normalizeWebsiteImageUrl("alif-car-import-api.alifcarimports.workers.dev/r2/photo.jpg")
         )
     }
+
+    @Test
+    fun tikTokAppLauncher_resolvesVideoProfileAndHandleUrlsCleanly() {
+        assertEquals(
+            "https://www.tiktok.com/@alifcarimport/video/7400000000000000001?is_from_webapp=1",
+            com.example.ui.components.TikTokAppLauncher.resolveLaunchUrl(
+                videoUrl = "https://www.tiktok.com/@alifcarimport/video/7400000000000000001?is_from_webapp=1",
+                fallbackProfileUrl = "https://www.tiktok.com/@alifcarimport",
+                fallbackHandle = "@alifcarimport"
+            )
+        )
+        assertEquals(
+            "https://www.tiktok.com/@alifcarimport",
+            com.example.ui.components.TikTokAppLauncher.resolveLaunchUrl(
+                videoUrl = "",
+                fallbackProfileUrl = "https://www.tiktok.com/@alifcarimport",
+                fallbackHandle = "@alifcarimport"
+            )
+        )
+        assertEquals(
+            "https://www.tiktok.com/@alifcarimport",
+            com.example.ui.components.TikTokAppLauncher.resolveLaunchUrl(
+                videoUrl = "",
+                fallbackProfileUrl = "",
+                fallbackHandle = "@alifcarimport"
+            )
+        )
+    }
+
+    @Test
+    fun interactionsAnalyticsEngine_countsVisitorsAcrossAllRangesWhenOnlySummaryCountersExist() {
+        val nowMillis = 1_760_000_000_000L
+        val summaryOnlyStats = com.example.data.model.WebsiteVisitorStats(
+            totalVisits = 120L,
+            todayVisits = 9L,
+            last7DaysVisits = 44L,
+            uniqueVisitors = 35L,
+            lastVisitAtMillis = nowMillis - 60_000L,
+            recentVisitRecords = emptyList(),
+            isLoaded = true
+        )
+
+        val report1d = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = summaryOnlyStats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.ONE_DAY,
+            nowMillis = nowMillis
+        )
+        assertEquals(9L, report1d.periodVisits)
+        assertEquals(9L, report1d.buckets.sumOf { it.visits })
+
+        val report3d = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = summaryOnlyStats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.THREE_DAYS,
+            nowMillis = nowMillis
+        )
+        assertEquals(9L, report3d.periodVisits)
+        assertEquals(9L, report3d.buckets.sumOf { it.visits })
+
+        val report7d = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = summaryOnlyStats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.SEVEN_DAYS,
+            nowMillis = nowMillis
+        )
+        assertEquals(44L, report7d.periodVisits)
+        assertEquals(44L, report7d.buckets.sumOf { it.visits })
+
+        val report30d = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = summaryOnlyStats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.THIRTY_DAYS,
+            nowMillis = nowMillis
+        )
+        assertEquals(120L, report30d.periodVisits)
+        assertEquals(120L, report30d.buckets.sumOf { it.visits })
+
+        val report1y = com.example.data.model.InteractionsAnalyticsEngine.computeReport(
+            stats = summaryOnlyStats,
+            inquiries = emptyList(),
+            range = com.example.data.model.VisitorTimeRange.ONE_YEAR,
+            nowMillis = nowMillis
+        )
+        assertEquals(120L, report1y.periodVisits)
+        assertEquals(120L, report1y.buckets.sumOf { it.visits })
+    }
 }

@@ -115,9 +115,22 @@ object InteractionsAnalyticsEngine {
         val allTimeTotal = maxOf(stats.totalVisits, allRecords.size.toLong())
         val rawPeriodCount = periodRecords.size.toLong()
         val periodVisits = when {
-            range == VisitorTimeRange.ONE_DAY -> maxOf(rawPeriodCount, stats.todayVisits).coerceAtMost(allTimeTotal)
-            range.durationDays == 7 -> maxOf(rawPeriodCount, stats.last7DaysVisits).coerceAtMost(allTimeTotal)
-            else -> rawPeriodCount
+            range == VisitorTimeRange.ONE_DAY ->
+                maxOf(rawPeriodCount, stats.todayVisits).coerceAtMost(allTimeTotal)
+            range == VisitorTimeRange.THREE_DAYS ->
+                maxOf(
+                    rawPeriodCount,
+                    stats.todayVisits,
+                    if (allRecords.isEmpty() && stats.todayVisits == 0L) stats.last7DaysVisits else 0L
+                ).coerceAtMost(allTimeTotal)
+            range.durationDays == 7 ->
+                maxOf(rawPeriodCount, stats.last7DaysVisits, stats.todayVisits).coerceAtMost(allTimeTotal)
+            else ->
+                if (allRecords.isEmpty()) {
+                    maxOf(stats.totalVisits, stats.last7DaysVisits, stats.todayVisits).coerceAtMost(allTimeTotal)
+                } else {
+                    maxOf(rawPeriodCount, stats.last7DaysVisits, stats.todayVisits).coerceAtMost(allTimeTotal)
+                }
         }
         val previousPeriodVisits = previousRecords.size.toLong()
 
@@ -215,23 +228,23 @@ object InteractionsAnalyticsEngine {
     ): List<TrafficChartBucket> {
         return when (range) {
             VisitorTimeRange.ONE_DAY -> buildHourlySlots(records, nowMillis, fallbackCount)
-            VisitorTimeRange.THREE_DAYS -> buildDailyBuckets(records, nowMillis, days = 3, labelPattern = "EEE", fullPattern = "EEE, MMM d")
+            VisitorTimeRange.THREE_DAYS -> buildDailyBuckets(records, nowMillis, days = 3, labelPattern = "EEE", fullPattern = "EEE, MMM d", fallbackCount = fallbackCount)
             VisitorTimeRange.SEVEN_DAYS, VisitorTimeRange.ONE_WEEK ->
-                buildDailyBuckets(records, nowMillis, days = 7, labelPattern = "EEE", fullPattern = "EEE, MMM d")
+                buildDailyBuckets(records, nowMillis, days = 7, labelPattern = "EEE", fullPattern = "EEE, MMM d", fallbackCount = fallbackCount)
             VisitorTimeRange.FOURTEEN_DAYS, VisitorTimeRange.TWO_WEEKS ->
-                buildMultiDayBuckets(records, nowMillis, totalDays = 14, bucketCount = 7)
+                buildMultiDayBuckets(records, nowMillis, totalDays = 14, bucketCount = 7, fallbackCount = fallbackCount)
             VisitorTimeRange.THIRTY_DAYS ->
-                buildMultiDayBuckets(records, nowMillis, totalDays = 30, bucketCount = 6)
+                buildMultiDayBuckets(records, nowMillis, totalDays = 30, bucketCount = 6, fallbackCount = fallbackCount)
             VisitorTimeRange.FOUR_WEEKS ->
-                buildWeeklyBuckets(records, nowMillis, weeks = 4)
+                buildWeeklyBuckets(records, nowMillis, weeks = 4, fallbackCount = fallbackCount)
             VisitorTimeRange.TWELVE_WEEKS ->
-                buildWeeklyBuckets(records, nowMillis, weeks = 12)
+                buildWeeklyBuckets(records, nowMillis, weeks = 12, fallbackCount = fallbackCount)
             VisitorTimeRange.ONE_YEAR ->
-                buildMonthlyBuckets(records, nowMillis, months = 12)
+                buildMonthlyBuckets(records, nowMillis, months = 12, fallbackCount = fallbackCount)
             VisitorTimeRange.TWO_YEARS ->
-                buildQuarterOrBiMonthBuckets(records, nowMillis, totalMonths = 24, stepMonths = 3)
+                buildQuarterOrBiMonthBuckets(records, nowMillis, totalMonths = 24, stepMonths = 3, fallbackCount = fallbackCount)
             VisitorTimeRange.FIVE_YEARS ->
-                buildYearlyBuckets(records, nowMillis, years = 5)
+                buildYearlyBuckets(records, nowMillis, years = 5, fallbackCount = fallbackCount)
         }
     }
 
@@ -273,7 +286,8 @@ object InteractionsAnalyticsEngine {
         nowMillis: Long,
         days: Int,
         labelPattern: String,
-        fullPattern: String
+        fullPattern: String,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val shortFmt = SimpleDateFormat(labelPattern, Locale.US)
         val fullFmt = SimpleDateFormat(fullPattern, Locale.US)
@@ -286,11 +300,12 @@ object InteractionsAnalyticsEngine {
             val endMs = if (offset == 0) upperBound else startMs + DAY_MILLIS
             val inBucket = records.filter { it.createdAtMillis in startMs until endMs }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (offset == 0 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             TrafficChartBucket(
                 label = shortFmt.format(Date(startMs)),
                 fullLabel = fullFmt.format(Date(startMs)),
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }
@@ -299,7 +314,8 @@ object InteractionsAnalyticsEngine {
         records: List<PageVisitRecord>,
         nowMillis: Long,
         totalDays: Int,
-        bucketCount: Int
+        bucketCount: Int,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val start = nowMillis - (totalDays.toLong() * DAY_MILLIS)
         val stepMs = (totalDays.toLong() * DAY_MILLIS) / bucketCount
@@ -309,13 +325,14 @@ object InteractionsAnalyticsEngine {
             val bEnd = if (idx == bucketCount - 1) nowMillis + 1L else bStart + stepMs
             val inBucket = records.filter { it.createdAtMillis in bStart until bEnd }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (idx == bucketCount - 1 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             val label = fmt.format(Date(bStart))
             val fullLabel = "${fmt.format(Date(bStart))} – ${fmt.format(Date(bEnd - 1L))}"
             TrafficChartBucket(
                 label = label,
                 fullLabel = fullLabel,
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }
@@ -323,7 +340,8 @@ object InteractionsAnalyticsEngine {
     private fun buildWeeklyBuckets(
         records: List<PageVisitRecord>,
         nowMillis: Long,
-        weeks: Int
+        weeks: Int,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val weekMs = 7L * DAY_MILLIS
         val start = nowMillis - (weeks.toLong() * weekMs)
@@ -333,13 +351,14 @@ object InteractionsAnalyticsEngine {
             val bEnd = if (idx == weeks - 1) nowMillis + 1L else bStart + weekMs
             val inBucket = records.filter { it.createdAtMillis in bStart until bEnd }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (idx == weeks - 1 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             val label = if (weeks <= 4) "W${idx + 1}" else if (idx % 2 == 0) "W${idx + 1}" else ""
             val fullLabel = "Week ${idx + 1} (${fmt.format(Date(bStart))} – ${fmt.format(Date(bEnd - 1L))})"
             TrafficChartBucket(
                 label = label,
                 fullLabel = fullLabel,
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }
@@ -347,7 +366,8 @@ object InteractionsAnalyticsEngine {
     private fun buildMonthlyBuckets(
         records: List<PageVisitRecord>,
         nowMillis: Long,
-        months: Int
+        months: Int,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val shortFmt = SimpleDateFormat("MMM", Locale.US)
         val fullFmt = SimpleDateFormat("MMMM yyyy", Locale.US)
@@ -366,13 +386,14 @@ object InteractionsAnalyticsEngine {
             val endMs = if (offset == 0) nowMillis + 1L else calEnd.timeInMillis
             val inBucket = records.filter { it.createdAtMillis in startMs until endMs }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (offset == 0 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             val rawMonth = shortFmt.format(Date(startMs))
             val label = if (offset % 2 == 0 || offset == 0) rawMonth else ""
             TrafficChartBucket(
                 label = label,
                 fullLabel = fullFmt.format(Date(startMs)),
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }
@@ -381,7 +402,8 @@ object InteractionsAnalyticsEngine {
         records: List<PageVisitRecord>,
         nowMillis: Long,
         totalMonths: Int,
-        stepMonths: Int
+        stepMonths: Int,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val count = totalMonths / stepMonths
         val shortFmt = SimpleDateFormat("MMM ''yy", Locale.US)
@@ -402,13 +424,14 @@ object InteractionsAnalyticsEngine {
             val endMs = if (idx == 0) nowMillis + 1L else calEnd.timeInMillis
             val inBucket = records.filter { it.createdAtMillis in startMs until endMs }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (idx == 0 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             val label = if (idx % 2 == 0) shortFmt.format(Date(startMs)) else ""
             val fullLabel = "${shortFmt.format(Date(startMs))} – ${shortFmt.format(Date(endMs - 1L))}"
             TrafficChartBucket(
                 label = label,
                 fullLabel = fullLabel,
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }
@@ -416,7 +439,8 @@ object InteractionsAnalyticsEngine {
     private fun buildYearlyBuckets(
         records: List<PageVisitRecord>,
         nowMillis: Long,
-        years: Int
+        years: Int,
+        fallbackCount: Long = 0L
     ): List<TrafficChartBucket> {
         val currentYear = Calendar.getInstance().apply { timeInMillis = nowMillis }.get(Calendar.YEAR)
         return (years - 1 downTo 0).map { offset ->
@@ -433,11 +457,12 @@ object InteractionsAnalyticsEngine {
             val endMs = if (offset == 0) nowMillis + 1L else calEnd.timeInMillis
             val inBucket = records.filter { it.createdAtMillis in startMs until endMs }
             val unique = inBucket.mapTo(HashSet()) { it.visitorId.ifBlank { it.id } }.size.toLong()
+            val visits = if (offset == 0 && inBucket.isEmpty() && fallbackCount > 0L) fallbackCount else inBucket.size.toLong()
             TrafficChartBucket(
                 label = year.toString(),
                 fullLabel = "Year $year",
-                visits = inBucket.size.toLong(),
-                uniqueVisitors = unique
+                visits = visits,
+                uniqueVisitors = maxOf(unique, if (visits > 0L && unique == 0L) 1L else 0L)
             )
         }
     }

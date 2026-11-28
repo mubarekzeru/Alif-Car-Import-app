@@ -10,6 +10,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.data.firebase.SecuritySessionRepository
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -132,6 +133,7 @@ fun onGoogleSignInClicked(
 }
 
 fun signInWithEmailPassword(
+    context: Context,
     email: String,
     password: String,
     onAuthSuccess: () -> Unit,
@@ -166,9 +168,21 @@ fun signInWithEmailPassword(
             }
         } catch (e: FirebaseAuthInvalidUserException) {
             Log.w(AUTH_TAG, "Email sign-in invalid user", e)
+            SecuritySessionRepository.recordAdminLoginAttemptToCloud(
+                context = context,
+                email = trimmedEmail,
+                status = "unauthorized",
+                reason = "Unregistered email attempted Admin App login"
+            )
             onAuthError("No account found for $trimmedEmail. You can continue with Google instead.")
         } catch (e: FirebaseAuthInvalidCredentialsException) {
             Log.w(AUTH_TAG, "Email sign-in invalid credentials", e)
+            SecuritySessionRepository.recordAdminLoginAttemptToCloud(
+                context = context,
+                email = trimmedEmail,
+                status = "failed",
+                reason = "Incorrect email or password on Admin App"
+            )
             onAuthError("Incorrect email or password. Please check and try again.")
         } catch (e: Exception) {
             Log.e(AUTH_TAG, "Email sign-in failed", e)

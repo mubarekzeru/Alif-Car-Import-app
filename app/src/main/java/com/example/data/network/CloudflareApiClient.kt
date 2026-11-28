@@ -937,8 +937,13 @@ class CloudflareApiClient(
             // Also synthesize records from aggregated `daily` or `byDay` arrays if individual visits weren't returned
             val dailyArr = data.optJSONArray("daily")
                 ?: data.optJSONArray("dailyVisits")
+                ?: data.optJSONArray("daily_visits")
                 ?: data.optJSONArray("byDay")
+                ?: data.optJSONArray("by_day")
                 ?: data.optJSONArray("days")
+                ?: root.optJSONArray("daily")
+                ?: root.optJSONArray("byDay")
+            val shouldSynthesizeFromDaily = parsedRecords.isEmpty()
             var totalFromDaily = 0L
             var todayFromDaily = 0L
             var sevenDayFromDaily = 0L
@@ -946,19 +951,30 @@ class CloudflareApiClient(
                 for (i in 0 until dailyArr.length()) {
                     val item = dailyArr.optJSONObject(i) ?: continue
                     val count = parseLong(
-                        item.opt("visits") ?: item.opt("views") ?: item.opt("count") ?: item.opt("total"),
+                        item.opt("visits")
+                            ?: item.opt("views")
+                            ?: item.opt("pageViews")
+                            ?: item.opt("page_views")
+                            ?: item.opt("count")
+                            ?: item.opt("total"),
                         defaultValue = 0L
                     ).coerceAtLeast(0L)
                     totalFromDaily += count
-                    val dateKey = item.optStringClean("date").ifBlank { item.optStringClean("dateKey") }
+                    val dateKey = item.optStringClean("date")
+                        .ifBlank { item.optStringClean("dateKey") }
+                        .ifBlank { item.optStringClean("date_key") }
+                        .ifBlank { item.optStringClean("day") }
                     val dayMillis = parseDateKeyMillis(dateKey) ?: 0L
+                    if (dayMillis > latestVisitMillis && count > 0L) {
+                        latestVisitMillis = dayMillis
+                    }
                     if (dateKey == todayKey) {
                         todayFromDaily += count
                     }
                     if (dayMillis >= sevenDaysAgoMillis) {
                         sevenDayFromDaily += count
                     }
-                    if (parsedRecords.isEmpty() && count > 0L && dayMillis > 0L) {
+                    if (shouldSynthesizeFromDaily && count > 0L && dayMillis > 0L) {
                         val capped = count.coerceAtMost(50L).toInt()
                         for (n in 0 until capped) {
                             parsedRecords.add(
@@ -975,24 +991,121 @@ class CloudflareApiClient(
                 }
             }
 
+            // Synthesize page records from `byPage` / `topPages` / `pages` if neither visit logs nor daily arrays were returned
+            val pagesArr = data.optJSONArray("byPage")
+                ?: data.optJSONArray("by_page")
+                ?: data.optJSONArray("topPages")
+                ?: data.optJSONArray("top_pages")
+                ?: data.optJSONArray("pages")
+                ?: root.optJSONArray("byPage")
+                ?: root.optJSONArray("topPages")
+            var totalFromPages = 0L
+            if (pagesArr != null) {
+                val shouldSynthesizeFromPages = parsedRecords.isEmpty()
+                for (i in 0 until pagesArr.length()) {
+                    val item = pagesArr.optJSONObject(i) ?: continue
+                    val count = parseLong(
+                        item.opt("visits")
+                            ?: item.opt("views")
+                            ?: item.opt("count")
+                            ?: item.opt("total"),
+                        defaultValue = 0L
+                    ).coerceAtLeast(0L)
+                    totalFromPages += count
+                    if (shouldSynthesizeFromPages && count > 0L) {
+                        val rawPage = item.optStringClean("page")
+                            .ifBlank { item.optStringClean("path") }
+                            .ifBlank { item.optStringClean("pathname") }
+                            .ifBlank { "/" }
+                        val normalizedPage = LoginSecurityAlert.normalizePagePath(rawPage).ifBlank { "/" }
+                        val capped = count.coerceAtMost(30L).toInt()
+                        for (n in 0 until capped) {
+                            parsedRecords.add(
+                                PageVisitRecord(
+                                    id = "page_${i}_$n",
+                                    page = normalizedPage,
+                                    visitorId = "",
+                                    dateKey = todayKey,
+                                    createdAtMillis = (nowMillis - (n * 1000L)).coerceAtLeast(1L)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
             parsedRecords.sortByDescending { it.createdAtMillis }
 
-            val counterTotal = listOf("totalVisits", "totalViews", "totalPageViews", "total", "count", "views", "visits")
-                .firstNotNullOfOrNull { key -> parseNullableLong(data.opt(key)) }
-                ?.coerceAtLeast(0L) ?: 0L
-            val counterToday = listOf("todayVisits", "todayViews", "today", "viewsToday", "visitsToday")
-                .firstNotNullOfOrNull { key -> parseNullableLong(data.opt(key)) }
-                ?.coerceAtLeast(0L) ?: 0L
-            val counter7d = listOf("last7DaysVisits", "last7DaysViews", "last7Days", "weekVisits", "weekViews", "weeklyVisits")
-                .firstNotNullOfOrNull { key -> parseNullableLong(data.opt(key)) }
-                ?.coerceAtLeast(0L) ?: 0L
-            val counterUnique = listOf("uniqueVisitors", "uniqueViews", "unique", "visitors")
-                .firstNotNullOfOrNull { key -> parseNullableLong(data.opt(key)) }
-                ?.coerceAtLeast(0L) ?: 0L
-            val counterLastVisit = listOf("lastVisitAtMillis", "lastVisitAt", "updatedAt", "lastSeenAt")
-                .firstNotNullOfOrNull { key -> parseMillis(data.opt(key)) } ?: 0L
+            val candidateObjects = listOfNotNull(
+                data,
+                data.optJSONObject("summary"),
+                data.optJSONObject("totals"),
+                data.optJSONObject("metrics"),
+                data.optJSONObject("overview"),
+                data.optJSONObject("stats"),
+                data.optJSONObject("visitors"),
+                root.takeIf { it !== data }
+            )
 
-            val totalVisits = maxOf(counterTotal, totalFromDaily, parsedRecords.size.toLong())
+            fun findFirstLong(keys: List<String>): Long {
+                for (obj in candidateObjects) {
+                    for (key in keys) {
+                        if (obj.has(key) && !obj.isNull(key)) {
+                            parseNullableLong(obj.opt(key))?.let { return it.coerceAtLeast(0L) }
+                        }
+                    }
+                }
+                return 0L
+            }
+
+            fun findFirstMillis(keys: List<String>): Long {
+                for (obj in candidateObjects) {
+                    for (key in keys) {
+                        if (obj.has(key) && !obj.isNull(key)) {
+                            parseMillis(obj.opt(key))?.let { if (it > 0L) return it }
+                        }
+                    }
+                }
+                return 0L
+            }
+
+            val counterTotal = findFirstLong(
+                listOf(
+                    "totalVisits", "total_visits", "totalViews", "total_views",
+                    "totalPageViews", "total_page_views", "pageViews", "page_views", "pageviews",
+                    "allTimeVisits", "all_time_visits", "totalVisitors", "total_visitors",
+                    "total", "count", "views", "visits"
+                )
+            )
+            val counterToday = findFirstLong(
+                listOf(
+                    "todayVisits", "today_visits", "todayViews", "today_views",
+                    "viewsToday", "views_today", "visitsToday", "visits_today",
+                    "todayVisitors", "today_visitors", "today"
+                )
+            )
+            val counter7d = findFirstLong(
+                listOf(
+                    "last7DaysVisits", "last_7_days_visits", "last7DaysViews", "last_7_days_views",
+                    "last7Days", "last_7_days", "visits7d", "visits_7d", "views7d", "views_7d",
+                    "weekVisits", "week_visits", "weekViews", "week_views",
+                    "weeklyVisits", "weekly_visits", "past7Days", "past_7_days"
+                )
+            )
+            val counterUnique = findFirstLong(
+                listOf(
+                    "uniqueVisitors", "unique_visitors", "uniqueViews", "unique_views",
+                    "uniqueVisits", "unique_visits", "unique", "visitors"
+                )
+            )
+            val counterLastVisit = findFirstMillis(
+                listOf(
+                    "lastVisitAtMillis", "last_visit_at_millis", "lastVisitAt", "last_visit_at",
+                    "updatedAt", "updated_at", "lastSeenAt", "last_seen_at"
+                )
+            )
+
+            val totalVisits = maxOf(counterTotal, totalFromDaily, totalFromPages, parsedRecords.size.toLong())
             val todayVisits = maxOf(counterToday, todayFromDaily, visitsTodayFromLog).coerceAtMost(totalVisits)
             val last7Days = maxOf(counter7d, sevenDayFromDaily, visits7dFromLog, todayVisits).coerceAtMost(totalVisits)
             val uniqueVisitors = maxOf(counterUnique, uniqueIds.size.toLong()).coerceAtMost(totalVisits)

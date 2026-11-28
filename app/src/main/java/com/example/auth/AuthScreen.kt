@@ -115,6 +115,7 @@ fun AuthScreen(
     BackHandler(enabled = activeMode == AuthScreenMode.VERIFY_EMAIL && !isSigningIn) {
         errorMessage = null
         infoMessage = null
+        LoginTwoFactorStore.clear(context)
         signOut(
             credentialManager = credentialManager,
             scope = scope,
@@ -153,6 +154,7 @@ fun AuthScreen(
         errorMessage = null
         infoMessage = null
         isSigningIn = true
+        LoginTwoFactorStore.clear(context)
         onGoogleSignInClicked(
             context = context,
             credentialManager = credentialManager,
@@ -176,7 +178,9 @@ fun AuthScreen(
         errorMessage = null
         infoMessage = null
         isSigningIn = true
+        LoginTwoFactorStore.clear(context)
         signInWithEmailPassword(
+            context = context,
             email = emailInput,
             password = passwordInput,
             onAuthSuccess = {
@@ -629,6 +633,7 @@ fun AuthScreen(
                                         onClick = {
                                             errorMessage = null
                                             infoMessage = null
+                                            LoginTwoFactorStore.clear(context)
                                             signOut(
                                                 credentialManager = credentialManager,
                                                 scope = scope,

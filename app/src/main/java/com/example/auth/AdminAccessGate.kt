@@ -46,11 +46,13 @@ import androidx.compose.ui.unit.dp
 import android.content.Context
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.data.firebase.FirestoreProvider
 import com.example.data.firebase.SecuritySessionRepository
 import com.example.data.model.AdminAccessConfig
 import com.example.data.network.CloudflareApiClient
 import com.example.data.security.TotpAuthenticator
 import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -102,18 +104,43 @@ fun observeAdminAuthorization(
     val verified = isUserVerified(user)
 
     if (!verified) {
+        if (rawEmail.isNotBlank()) {
+            SecuritySessionRepository.recordAdminLoginAttemptToCloud(
+                context = context,
+                email = rawEmail,
+                status = "unauthorized",
+                reason = "Unverified email attempted Admin App login"
+            )
+        }
         emit(AdminAuthorizationState.Denied(rawEmail))
         return@flow
     }
 
     emit(AdminAuthorizationState.Checking)
 
-    // Ensure a valid Firebase Auth ID token before proceeding
+    // Ensure a valid Firebase Auth ID token & accurate authTimestamp before checking 2FA
     val tokenAuthTimeSeconds = runCatching {
         user.getIdToken(false).await().authTimestamp
-    }.getOrDefault(0L)
+    }.getOrDefault(0L).let { ts ->
+        if (ts > 0L) ts else runCatching { user.getIdToken(true).await().authTimestamp }.getOrDefault(0L)
+    }
     val userAuthTimeSeconds = tokenAuthTimeSeconds.takeIf { it > 0L }
         ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
+
+    val db = FirestoreProvider.get(context)
+
+    // Check server-side global session cutoff (config/security.forceSignOutBefore)
+    val securityDoc = runCatching {
+        db.collection(SecuritySessionRepository.COLLECTION_CONFIG)
+            .document(SecuritySessionRepository.DOC_SECURITY)
+            .get(Source.SERVER)
+            .await()
+    }.getOrNull()
+    val forceSignOutBeforeMs = securityDoc?.getTimestamp("forceSignOutBefore")?.toDate()?.time ?: 0L
+    if (forceSignOutBeforeMs > 0L && userAuthTimeSeconds > 0L && ((userAuthTimeSeconds + 1L) * 1000L) <= forceSignOutBeforeMs) {
+        emit(AdminAuthorizationState.SessionExpired(rawEmail))
+        return@flow
+    }
 
     if (AdminAuthorizationPolicy.isBootstrapOwnerEmail(rawEmail)) {
         val alreadyVerified = LoginTwoFactorStore.isSessionVerified(
@@ -121,23 +148,24 @@ fun observeAdminAuthorization(
             uid = user.uid,
             authTimeSeconds = userAuthTimeSeconds
         )
-        val localAuth = SecuritySessionRepository.readLocalAuthenticatorConfig(context)
-        val hasLoginAuthenticator = localAuth.enabled &&
-            localAuth.requireOnLogin &&
-            TotpAuthenticator.isValidSecretBase32(localAuth.secretBase32)
+        // Always fetch authoritative 2FA config from Firestore (falls back to cache/local prefs offline)
+        val cloudAuth = SecuritySessionRepository.fetchAuthenticatorConfigFromCloud(context)
+        val hasLoginAuthenticator = cloudAuth.enabled &&
+            cloudAuth.requireOnLogin &&
+            TotpAuthenticator.isValidSecretBase32(cloudAuth.secretBase32)
 
         if (LoginAuthenticatorPolicy.requiresAuthenticatorChallenge(
                 userEmail = rawEmail,
-                authenticatorEnabled = localAuth.enabled,
-                secretBase32 = localAuth.secretBase32,
+                authenticatorEnabled = cloudAuth.enabled,
+                secretBase32 = cloudAuth.secretBase32,
                 alreadyVerifiedForSession = alreadyVerified,
-                requireOnLogin = localAuth.requireOnLogin
+                requireOnLogin = cloudAuth.requireOnLogin
             )
         ) {
             emit(
                 AdminAuthorizationState.RequiresAuthenticator(
                     email = rawEmail,
-                    secretBase32 = localAuth.secretBase32,
+                    secretBase32 = cloudAuth.secretBase32,
                     authTimeSeconds = userAuthTimeSeconds
                 )
             )
@@ -148,7 +176,35 @@ fun observeAdminAuthorization(
         return@flow
     }
 
-    // Verify admin access directly against the Cloudflare Worker API using the Firebase ID token
+    // Check Firestore admin allowlist/membership first (supports emails granted via Grant Admin Access)
+    val firestoreAuthorized = runCatching {
+        val uidDoc = runCatching {
+            db.collection("admins").document(user.uid).get(Source.SERVER).await()
+        }.getOrNull()
+        val isExplicitUid = uidDoc?.exists() == true
+        val accessDoc = runCatching {
+            db.collection(SecuritySessionRepository.COLLECTION_CONFIG)
+                .document("adminAccess")
+                .get(Source.SERVER)
+                .await()
+        }.getOrNull()
+        val allowlisted = (accessDoc?.get("adminEmails") as? List<*>)
+            ?.mapNotNull { it as? String }
+            .orEmpty()
+        AdminAuthorizationPolicy.isAuthorizedAdmin(
+            userEmail = rawEmail,
+            isEmailVerified = verified,
+            isExplicitUidAdmin = isExplicitUid,
+            allowlistedEmails = allowlisted
+        )
+    }.getOrDefault(false)
+
+    if (firestoreAuthorized) {
+        emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
+        return@flow
+    }
+
+    // Verify admin access against the Cloudflare Worker API using the Firebase ID token
     val checkResult = try {
         apiClient.verifyAdminAccess()
     } catch (e: CancellationException) {
@@ -160,6 +216,14 @@ fun observeAdminAuthorization(
             if (isAuthorized) {
                 emit(AdminAuthorizationState.Authorized(verifiedWithAuthenticator = false))
             } else {
+                // Record blocked unauthorized attempt to Firestore so the owner gets an instant
+                // push alert + "Grant Admin Access" notification!
+                SecuritySessionRepository.recordAdminLoginAttemptToCloud(
+                    context = context,
+                    email = rawEmail,
+                    status = "unauthorized",
+                    reason = "Unauthorized email tried to sign into Admin App"
+                )
                 emit(AdminAuthorizationState.Denied(rawEmail))
             }
         },

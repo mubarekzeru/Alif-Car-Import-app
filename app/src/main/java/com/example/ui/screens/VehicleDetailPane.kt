@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -80,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.Vehicle
 import com.example.data.model.VehicleStatus
 import com.example.ui.components.ResilientAppImage
+import com.example.ui.components.TikTokAppLauncher
 import com.example.ui.components.colors
 import com.example.ui.components.formatCurrency
 import com.example.ui.components.formatMileageDisplay
@@ -211,6 +213,7 @@ fun VehicleDetailPane(
     modifier: Modifier = Modifier,
     visitorPreviewMode: Boolean = false
 ) {
+    val context = LocalContext.current
     val statusColors = vehicle.statusEnum.colors()
     val photoSlots = remember(vehicle.id, vehicle.imageUrl, vehicle.galleryImages) {
         vehicle.resolvedPhotoSlots()
@@ -640,9 +643,13 @@ fun VehicleDetailPane(
 
             if (vehicle.tiktokUrl.isNotBlank()) {
                 Card(
+                    onClick = {
+                        TikTokAppLauncher.openInTikTokApp(context, vehicle.tiktokUrl)
+                    },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    shape = MaterialTheme.shapes.large
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.testTag("vehicle_detail_tiktok_card")
                 ) {
                     Row(
                         modifier = Modifier
@@ -667,7 +674,7 @@ fun VehicleDetailPane(
                         }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "TikTok Walkaround",
+                                text = "Watch TikTok Walkaround",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -680,6 +687,12 @@ fun VehicleDetailPane(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = "Open in TikTok",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }

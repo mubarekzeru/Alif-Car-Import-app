@@ -781,15 +781,7 @@ fun TikTokInstagramGridCard(
                                 },
                                 onClick = {
                                     menuExpanded = false
-                                    runCatching {
-                                        val rawUrl = post.tiktokUrl.trim()
-                                        val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                                            rawUrl
-                                        } else {
-                                            "https://$rawUrl"
-                                        }
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
-                                    }
+                                    TikTokAppLauncher.openInTikTokApp(context, post.tiktokUrl)
                                 }
                             )
                         }
@@ -1020,15 +1012,11 @@ fun TikTokPostDetailDialog(
                             .align(Alignment.Center)
                             .size(58.dp)
                             .clickable(enabled = post.tiktokUrl.isNotBlank()) {
-                                runCatching {
-                                    val rawUrl = post.tiktokUrl.trim()
-                                    val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                                        rawUrl
-                                    } else {
-                                        "https://$rawUrl"
-                                    }
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
-                                }
+                                TikTokAppLauncher.openInTikTokApp(
+                                    context = context,
+                                    videoUrl = post.tiktokUrl,
+                                    fallbackHandle = handle
+                                )
                             }
                     ) {
                         Box(contentAlignment = Alignment.Center) {
@@ -1095,15 +1083,11 @@ fun TikTokPostDetailDialog(
                         if (post.tiktokUrl.isNotBlank()) {
                             Button(
                                 onClick = {
-                                    runCatching {
-                                        val rawUrl = post.tiktokUrl.trim()
-                                        val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                                            rawUrl
-                                        } else {
-                                            "https://$rawUrl"
-                                        }
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
-                                    }
+                                    TikTokAppLauncher.openInTikTokApp(
+                                        context = context,
+                                        videoUrl = post.tiktokUrl,
+                                        fallbackHandle = handle
+                                    )
                                 },
                                 shape = CircleShape,
                                 colors = ButtonDefaults.buttonColors(
@@ -1149,15 +1133,11 @@ fun TikTokPostDetailDialog(
                             if (post.tiktokUrl.isNotBlank()) {
                                 OutlinedButton(
                                     onClick = {
-                                        runCatching {
-                                            val rawUrl = post.tiktokUrl.trim()
-                                            val normalized = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-                                                rawUrl
-                                            } else {
-                                                "https://$rawUrl"
-                                            }
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(normalized)))
-                                        }
+                                        TikTokAppLauncher.openInTikTokApp(
+                                            context = context,
+                                            videoUrl = post.tiktokUrl,
+                                            fallbackHandle = handle
+                                        )
                                     },
                                     shape = CircleShape,
                                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),

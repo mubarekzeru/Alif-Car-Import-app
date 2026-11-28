@@ -163,20 +163,20 @@ object SecurityNotificationHelper {
         val title = when {
             isIncorrectCredentials -> "Incorrect Login Attempt (${alert.platform})"
             alert.isUnauthorizedAttempt -> "Blocked Admin Login Attempt (${alert.platform})"
-            alert.isOwnerAuthenticatorVerified -> "Verified Admin Sign-In (${alert.platform})"
-            else -> "Admin Login Attempt (${alert.platform})"
+            alert.isOwnerAuthenticatorVerified -> "Admin Sign-In Alert (${alert.platform})"
+            else -> "Admin Login Alert (${alert.platform})"
         }
         val body = when {
             isIncorrectCredentials && canOfferGrant ->
-                "${alert.email.trim()} entered incorrect credentials • ${alert.deviceName} • ${alert.location}. Tap to manage access or remove from logged in."
+                "${alert.email.trim()} entered incorrect credentials • ${alert.deviceName} • ${alert.location}. Tap to review or grant admin access."
             canOfferGrant ->
-                "${alert.email.trim()} tried to log in • ${alert.deviceName} • ${alert.location}. Tap to keep blocked, remove from logged in, or grant admin access."
+                "${alert.email.trim()} tried to log in • ${alert.deviceName} • ${alert.location}. Tap to keep blocked or grant admin access."
             alert.isUnauthorizedAttempt ->
                 "${alert.email.ifBlank { "Unknown account" }} tried to log in with incorrect details • ${alert.deviceName} • ${alert.location}."
             alert.isOwnerAuthenticatorVerified ->
-                "${alert.email.trim()} signed in with Google Authenticator • ${alert.deviceName} • ${alert.location}."
+                "${alert.email.trim()} signed in on ${alert.platform} • ${alert.deviceName} • ${alert.location}."
             else ->
-                "${alert.email.ifBlank { "Admin" }} signed in • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
+                "${alert.email.ifBlank { "Admin" }} signed in on ${alert.platform} • ${alert.deviceName} • ${alert.location}. Tap to confirm if this was you."
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_LOGIN_ALERTS)

@@ -184,4 +184,33 @@ class ExampleRobolectricTest {
         assertEquals(1, stats.recentVisitRecords.size)
         assertTrue(stats.isLoaded)
     }
+
+    @Test
+    fun `parse snake_case nested analytics summary and synthesize all daily buckets`() {
+        val payload = """
+            {
+              "analytics": {
+                "summary": {
+                  "total_visits": 85,
+                  "today_visits": 12,
+                  "last_7_days_visits": 42,
+                  "unique_visitors": 31
+                },
+                "daily": [
+                  { "date": "2025-10-08", "visits": 4 },
+                  { "date": "2025-10-09", "visits": 6 },
+                  { "date": "2025-10-10", "visits": 5 }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val parsed = CloudflareApiClient.parseAnalyticsResponse(payload)
+        assertEquals(85L, parsed.totalVisits)
+        assertEquals(12L, parsed.todayVisits)
+        assertEquals(42L, parsed.last7DaysVisits)
+        assertEquals(31L, parsed.uniqueVisitors)
+        assertEquals(15, parsed.recentVisitRecords.size)
+        assertTrue(parsed.isLoaded)
+    }
 }

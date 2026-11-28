@@ -118,7 +118,7 @@ import com.example.ui.components.HomeTikTokShowcaseSection
 import com.example.ui.components.LotMetricsStrip
 import com.example.ui.components.ResilientAppImage
 import com.example.ui.components.SettingsTabContent
-import com.example.ui.components.TikTokPostDetailDialog
+import com.example.ui.components.TikTokAppLauncher
 import com.example.ui.components.VehicleInventoryCard
 import com.example.ui.components.resolveCandidateImageUrls
 import com.example.ui.notifications.SecurityNotificationHelper
@@ -294,6 +294,7 @@ fun DashboardScreen(
                         filterState = filterState,
                         tikTokPosts = tikTokPosts,
                         tikTokHandle = showroomConfig.tiktok.handle,
+                        tikTokProfileUrl = showroomConfig.tiktok.profileUrl,
                         selectedVehicleId = selectedVehicleId,
                         sortMenuExpanded = sortMenuExpanded,
                         pendingAlertsCount = pendingAlertsCount,
@@ -342,6 +343,7 @@ fun DashboardScreen(
                         vehicles = allVehicles,
                         tikTokPosts = tikTokPosts,
                         tikTokHandle = showroomConfig.tiktok.handle,
+                        tikTokProfileUrl = showroomConfig.tiktok.profileUrl,
                         onSelectSection = portalViewModel::selectDashboardSection,
                         onOpenVehicleDetail = { vehicle -> onOpenVehicleDetail(vehicle.id) },
                         onOpenEditVehicle = { vehicle -> onOpenEditVehicle(vehicle.id) },
@@ -497,6 +499,7 @@ private fun HomeDashboardTab(
     filterState: FilterState,
     tikTokPosts: List<TikTokPost>,
     tikTokHandle: String,
+    tikTokProfileUrl: String,
     selectedVehicleId: String?,
     sortMenuExpanded: Boolean,
     pendingAlertsCount: Int,
@@ -522,7 +525,7 @@ private fun HomeDashboardTab(
     onDeleteTikTok: (TikTokPost) -> Unit,
     onViewAllTikTok: () -> Unit
 ) {
-    var selectedTikTokDetail by remember { mutableStateOf<TikTokPost?>(null) }
+    val context = LocalContext.current
     val visibleTikTokPosts = remember(tikTokPosts, filterState.searchQuery) {
         val query = filterState.searchQuery.trim()
         if (query.isEmpty()) {
@@ -898,7 +901,14 @@ private fun HomeDashboardTab(
                                             onEditClick = { onOpenEditVehicle(it.id) },
                                             onDeleteClick = onDeleteVehicle,
                                             onAddVehicleClick = onOpenAddVehicle,
-                                            onTikTokCardClick = { selectedTikTokDetail = it },
+                                            onTikTokCardClick = { post ->
+                                                TikTokAppLauncher.openInTikTokApp(
+                                                    context = context,
+                                                    videoUrl = post.tiktokUrl,
+                                                    fallbackProfileUrl = tikTokProfileUrl,
+                                                    fallbackHandle = tikTokHandle
+                                                )
+                                            },
                                             onTikTokEditClick = onOpenEditTikTok,
                                             onTikTokDeleteClick = onDeleteTikTok,
                                             onViewAllTikTok = onViewAllTikTok
@@ -950,7 +960,14 @@ private fun HomeDashboardTab(
                                     onEditClick = { onOpenEditVehicle(it.id) },
                                     onDeleteClick = onDeleteVehicle,
                                     onAddVehicleClick = onOpenAddVehicle,
-                                    onTikTokCardClick = { selectedTikTokDetail = it },
+                                    onTikTokCardClick = { post ->
+                                        TikTokAppLauncher.openInTikTokApp(
+                                            context = context,
+                                            videoUrl = post.tiktokUrl,
+                                            fallbackProfileUrl = tikTokProfileUrl,
+                                            fallbackHandle = tikTokHandle
+                                        )
+                                    },
                                     onTikTokEditClick = onOpenEditTikTok,
                                     onTikTokDeleteClick = onDeleteTikTok,
                                     onViewAllTikTok = onViewAllTikTok
@@ -961,23 +978,6 @@ private fun HomeDashboardTab(
                 }
             }
         }
-    }
-
-    selectedTikTokDetail?.let { post ->
-        TikTokPostDetailDialog(
-            post = post,
-            handle = tikTokHandle,
-            onDismiss = { selectedTikTokDetail = null },
-            onEditClick = {
-                selectedTikTokDetail = null
-                onOpenEditTikTok(post)
-            },
-            onDeleteClick = {
-                selectedTikTokDetail = null
-                onDeleteTikTok(post)
-            },
-            visitorPreviewMode = true
-        )
     }
 }
 

@@ -15,11 +15,18 @@ import com.example.data.model.SecurityLockHelper
 import com.example.data.security.TotpAuthenticator
 import com.example.ui.notifications.SecurityNotificationHelper
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -46,8 +53,12 @@ data class LocalAuthenticatorConfig(
 )
 
 /**
- * Local device session, alert history, Authenticator 2FA, and Firebase Auth password manager.
- * Operates completely without Firestore so the app never incurs Firestore read/write quota.
+ * Cross-device admin session, real-time login alert, unauthorized attempt, Authenticator 2FA,
+ * and Firebase Auth password manager backed by the provisioned named Firestore database
+ * (with local SharedPreferences cache for offline resilience).
+ *
+ * Inventory, TikTok posts, showroom config, and inquiries stay on the Cloudflare Worker API;
+ * Firestore is used exclusively for these lightweight security & access-control documents.
  */
 class SecuritySessionRepository(
     context: Context,
@@ -55,6 +66,7 @@ class SecuritySessionRepository(
 ) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val firestore: FirebaseFirestore by lazy { FirestoreProvider.get(appContext) }
 
     val localDeviceId: String = getOrCreateDeviceId()
 
@@ -94,6 +106,23 @@ class SecuritySessionRepository(
     @Volatile
     private var totpLockoutUntilMillis: Long = 0L
 
+    private val activeListeners = mutableListOf<ListenerRegistration>()
+    private val listenerLock = Any()
+
+    @Volatile
+    private var cloudLoginAlerts: List<LoginSecurityAlert> = emptyList()
+
+    @Volatile
+    private var cloudAttemptAlerts: List<LoginSecurityAlert> = emptyList()
+
+    @Volatile
+    private var loginAlertsInitialLoaded = false
+
+    @Volatile
+    private var attemptsInitialLoaded = false
+
+    private val seenAlertIds = HashSet<String>()
+
     init {
         loadFromLocalPrefs()
     }
@@ -108,13 +137,176 @@ class SecuritySessionRepository(
         uid: String,
         onNewAlert: (LoginSecurityAlert) -> Unit
     ) {
-        // Local-only security state — intentionally does not attach any Firestore snapshot listeners.
+        stopObservingCloudSecurity()
         loadFromLocalPrefs()
         _cloudSyncError.value = null
+
+        val mySessionId = currentSessionId(uid)
+        loginAlertsInitialLoaded = false
+        attemptsInitialLoaded = false
+        synchronized(seenAlertIds) {
+            seenAlertIds.clear()
+        }
+
+        // 1. Observe all active admin sessions across Android devices & Website browsers
+        val sessionsReg = firestore.collection(COLLECTION_ADMIN_SESSIONS)
+            .whereEqualTo("status", AdminDeviceStatus.ACTIVE.value)
+            .limit(MAX_OBSERVED_SESSIONS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(TAG, "adminSessions listener error", error)
+                    _cloudSyncError.value = error.localizedMessage ?: "Unable to sync active devices"
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
+                _cloudSyncError.value = null
+                val parsed = snapshot.documents
+                    .mapNotNull { parseAdminSessionDoc(it, mySessionId, localDeviceId) }
+                    .filter { it.status == AdminDeviceStatus.ACTIVE }
+                    .sortedWith(
+                        compareByDescending<ActiveDeviceSession> { it.isCurrentDevice }
+                            .thenByDescending { it.lastActiveMillis }
+                    )
+                if (parsed.isNotEmpty()) {
+                    _sessions.value = parsed
+                    saveLocalPrefs()
+                }
+            }
+
+        // 2. Watch this device's own session doc for remote revocation
+        val ownSessionReg = firestore.collection(COLLECTION_ADMIN_SESSIONS)
+            .document(mySessionId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val status = AdminDeviceStatus.fromValue(snapshot.getString("status"))
+                if (status == AdminDeviceStatus.REVOKED) {
+                    val updatedMs = snapshot.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
+                    val loginAt = _currentLoginAtMillis.value
+                    if (updatedMs == 0L || loginAt == 0L || updatedMs >= loginAt - 2_000L) {
+                        _isCurrentSessionRevoked.value = true
+                    }
+                }
+            }
+
+        // 3. Observe global force-sign-out timestamp (config/security)
+        val securityReg = firestore.collection(COLLECTION_CONFIG)
+            .document(DOC_SECURITY)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val forceBeforeMs = snapshot.getTimestamp("forceSignOutBefore")?.toDate()?.time ?: 0L
+                val authMs = currentAuthTimeMillis
+                if (forceBeforeMs > 0L && authMs > 0L && (authMs + 1_500L) <= forceBeforeMs) {
+                    _isCurrentSessionRevoked.value = true
+                }
+            }
+
+        // 4. Observe live loginAlerts (from other Android devices & Website admin logins)
+        val alertsReg = firestore.collection(COLLECTION_LOGIN_ALERTS)
+            .orderBy("timestampMillis", Query.Direction.DESCENDING)
+            .limit(MAX_OBSERVED_ALERTS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(TAG, "loginAlerts listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
+                val parsed = snapshot.documents
+                    .mapNotNull { parseLoginAlertDoc(it) }
+                    .filter { it.isAdminPageEvent }
+
+                val now = System.currentTimeMillis()
+                val isInitial = !loginAlertsInitialLoaded
+                loginAlertsInitialLoaded = true
+
+                val alertsToNotify = mutableListOf<LoginSecurityAlert>()
+                synchronized(seenAlertIds) {
+                    parsed.forEach { alert ->
+                        val isNew = seenAlertIds.add(alert.id)
+                        if (isNew) {
+                            val isOtherDeviceOrWebsite = alert.sessionId.isNotBlank() &&
+                                alert.sessionId != mySessionId
+                            val isRecent = alert.timestampMillis > 0L &&
+                                (now - alert.timestampMillis) <= RECENT_ALERT_WINDOW_MILLIS
+                            if (isOtherDeviceOrWebsite && (!isInitial || isRecent)) {
+                                alertsToNotify.add(alert)
+                            }
+                        }
+                    }
+                }
+
+                cloudLoginAlerts = parsed
+                rebuildMergedAlerts()
+                alertsToNotify.forEach { onNewAlert(it) }
+            }
+
+        // 5. Observe unauthorized & failed admin login attempts (from Android App & Website)
+        val attemptsReg = firestore.collection(COLLECTION_ADMIN_LOGIN_ATTEMPTS)
+            .orderBy("timestampMillis", Query.Direction.DESCENDING)
+            .limit(MAX_OBSERVED_ALERTS)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(TAG, "adminLoginAttempts listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
+                val parsed = snapshot.documents
+                    .mapNotNull { parseAdminAttemptDoc(it) }
+                    .filter { it.isAdminPageEvent }
+
+                val now = System.currentTimeMillis()
+                val isInitial = !attemptsInitialLoaded
+                attemptsInitialLoaded = true
+
+                val alertsToNotify = mutableListOf<LoginSecurityAlert>()
+                synchronized(seenAlertIds) {
+                    parsed.forEach { alert ->
+                        val isNew = seenAlertIds.add(alert.id)
+                        if (isNew) {
+                            val isRecent = alert.timestampMillis > 0L &&
+                                (now - alert.timestampMillis) <= RECENT_ATTEMPT_WINDOW_MILLIS
+                            if (!isInitial || isRecent) {
+                                alertsToNotify.add(alert)
+                            }
+                        }
+                    }
+                }
+
+                cloudAttemptAlerts = parsed
+                rebuildMergedAlerts()
+                alertsToNotify.forEach { onNewAlert(it) }
+            }
+
+        // 6. Observe cloud Authenticator 2FA config (config/authenticator)
+        val authConfigReg = firestore.collection(COLLECTION_CONFIG)
+            .document(DOC_AUTHENTICATOR)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(TAG, "config/authenticator listener error", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val cfg = parseAuthenticatorDoc(snapshot)
+                    applyCloudAuthenticatorConfig(cfg)
+                }
+            }
+
+        synchronized(listenerLock) {
+            activeListeners.add(sessionsReg)
+            activeListeners.add(ownSessionReg)
+            activeListeners.add(securityReg)
+            activeListeners.add(alertsReg)
+            activeListeners.add(attemptsReg)
+            activeListeners.add(authConfigReg)
+        }
     }
 
     fun stopObservingCloudSecurity() {
-        // No remote listeners to detach.
+        synchronized(listenerLock) {
+            activeListeners.forEach { reg ->
+                runCatching { reg.remove() }
+            }
+            activeListeners.clear()
+        }
     }
 
     suspend fun registerCurrentDeviceSignIn(
@@ -178,12 +370,23 @@ class SecuritySessionRepository(
         )
         upsertLocalSession(updatedSession)
 
+        // Sync active device session to Firestore so other devices & website see accurate device count
+        upsertSessionInCloud(user = user, session = updatedSession)
+
+        // Pull latest cloud authenticator status into memory/prefs immediately
+        runCatching {
+            val cloudAuth = fetchAuthenticatorConfigFromCloud(appContext)
+            applyCloudAuthenticatorConfig(cloudAuth)
+        }
+
         var createdAlertId: String? = null
+        var createdAlertPendingInCloud = false
         if (isFreshSignIn) {
             val isOwnerAuthVerified = verifiedWithAuthenticator &&
                 AdminAuthorizationPolicy.isBootstrapOwnerEmail(email)
+            val alertId = "alert_${UUID.randomUUID().toString().replace("-", "").take(12)}"
             val alert = LoginSecurityAlert(
-                id = "alert_${UUID.randomUUID().toString().replace("-", "").take(12)}",
+                id = alertId,
                 sessionId = sessionId,
                 email = email,
                 deviceName = deviceName,
@@ -195,10 +398,24 @@ class SecuritySessionRepository(
                 } else {
                     LoginAlertDecision.PENDING
                 },
+                sourcePage = "/admin",
                 verifiedWithAuthenticator = isOwnerAuthVerified
             )
             createdAlertId = alert.id
+            synchronized(seenAlertIds) {
+                seenAlertIds.add(alert.id)
+            }
             prependLocalAlert(alert)
+
+            // Write login alert to Firestore so all other devices receive a live notification!
+            // Note: firestore.rules requires decision == "pending" on create, then allows update to "confirmed_me".
+            val createdInCloud = writeLoginAlertToCloud(
+                user = user,
+                alert = alert,
+                isOwnerAuthVerified = isOwnerAuthVerified
+            )
+            createdAlertPendingInCloud = createdInCloud && !isOwnerAuthVerified
+
             if (!isOwnerAuthVerified) {
                 onNewLoginAlert(alert)
             }
@@ -212,11 +429,25 @@ class SecuritySessionRepository(
                 lastActiveMillis = System.currentTimeMillis()
             )
             upsertLocalSession(enrichedSession)
+            upsertSessionInCloud(user = user, session = enrichedSession)
             if (createdAlertId != null) {
                 _alerts.value = _alerts.value.map { alert ->
                     if (alert.id == createdAlertId) alert.copy(location = ipLocation) else alert
                 }
                 saveLocalPrefs()
+                if (createdAlertPendingInCloud) {
+                    runCatching {
+                        firestore.collection(COLLECTION_LOGIN_ALERTS)
+                            .document(createdAlertId)
+                            .update(
+                                mapOf(
+                                    "location" to ipLocation.take(160),
+                                    "updatedAt" to FieldValue.serverTimestamp()
+                                )
+                            )
+                            .await()
+                    }
+                }
             }
         }
     }
@@ -224,21 +455,94 @@ class SecuritySessionRepository(
     suspend fun refreshHeartbeat() {
         val user = auth.currentUser ?: return
         val sessionId = currentSessionId(user.uid)
+        val now = System.currentTimeMillis()
         val current = _sessions.value.firstOrNull { it.id == sessionId } ?: return
-        upsertLocalSession(
-            current.copy(
-                lastActiveMillis = System.currentTimeMillis(),
-                status = AdminDeviceStatus.ACTIVE
-            )
+        val updated = current.copy(
+            lastActiveMillis = now,
+            status = AdminDeviceStatus.ACTIVE
         )
+        upsertLocalSession(updated)
+        runCatching {
+            firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                .document(sessionId)
+                .update(
+                    mapOf(
+                        "lastActiveMillis" to now,
+                        "status" to AdminDeviceStatus.ACTIVE.value,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+        }
     }
 
     suspend fun refreshFromServer() {
+        val user = auth.currentUser ?: return
         _isRefreshing.value = true
         try {
-            loadFromLocalPrefs()
+            val mySessionId = currentSessionId(user.uid)
+            // Fetch live active sessions from server
+            val sessionsSnap = runCatching {
+                firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                    .whereEqualTo("status", AdminDeviceStatus.ACTIVE.value)
+                    .limit(MAX_OBSERVED_SESSIONS)
+                    .get(Source.SERVER)
+                    .await()
+            }.getOrElse {
+                firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                    .whereEqualTo("status", AdminDeviceStatus.ACTIVE.value)
+                    .limit(MAX_OBSERVED_SESSIONS)
+                    .get()
+                    .await()
+            }
+            val parsedSessions = sessionsSnap.documents
+                .mapNotNull { parseAdminSessionDoc(it, mySessionId, localDeviceId) }
+                .filter { it.status == AdminDeviceStatus.ACTIVE }
+                .sortedWith(
+                    compareByDescending<ActiveDeviceSession> { it.isCurrentDevice }
+                        .thenByDescending { it.lastActiveMillis }
+                )
+            if (parsedSessions.isNotEmpty()) {
+                _sessions.value = parsedSessions
+            }
+
+            // Fetch live loginAlerts & adminLoginAttempts
+            runCatching {
+                val alertsSnap = firestore.collection(COLLECTION_LOGIN_ALERTS)
+                    .orderBy("timestampMillis", Query.Direction.DESCENDING)
+                    .limit(MAX_OBSERVED_ALERTS)
+                    .get(Source.SERVER)
+                    .await()
+                cloudLoginAlerts = alertsSnap.documents
+                    .mapNotNull { parseLoginAlertDoc(it) }
+                    .filter { it.isAdminPageEvent }
+            }
+            runCatching {
+                val attemptsSnap = firestore.collection(COLLECTION_ADMIN_LOGIN_ATTEMPTS)
+                    .orderBy("timestampMillis", Query.Direction.DESCENDING)
+                    .limit(MAX_OBSERVED_ALERTS)
+                    .get(Source.SERVER)
+                    .await()
+                cloudAttemptAlerts = attemptsSnap.documents
+                    .mapNotNull { parseAdminAttemptDoc(it) }
+                    .filter { it.isAdminPageEvent }
+            }
+            rebuildMergedAlerts()
+
+            // Refresh cloud authenticator status
+            runCatching {
+                val cfg = fetchAuthenticatorConfigFromCloud(appContext)
+                applyCloudAuthenticatorConfig(cfg)
+            }
+
             refreshHeartbeat()
             _cloudSyncError.value = null
+            saveLocalPrefs()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshFromServer failed", e)
+            _cloudSyncError.value = e.localizedMessage ?: "Unable to refresh active devices"
         } finally {
             _isRefreshing.value = false
         }
@@ -250,8 +554,23 @@ class SecuritySessionRepository(
                 alert.copy(decision = LoginAlertDecision.CONFIRMED_ME)
             } else alert
         }
+        cloudLoginAlerts = cloudLoginAlerts.map { alert ->
+            if (alert.id == alertId) alert.copy(decision = LoginAlertDecision.CONFIRMED_ME) else alert
+        }
         markAlertRead(alertId)
         saveLocalPrefs()
+
+        firestore.collection(COLLECTION_LOGIN_ALERTS)
+            .document(alertId)
+            .update(
+                mapOf(
+                    "decision" to LoginAlertDecision.CONFIRMED_ME.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnFailureListener { e ->
+                Log.w(TAG, "Failed to confirm loginAlert $alertId in Firestore", e)
+            }
     }
 
     fun rejectAlertNotMe(alertId: String) {
@@ -262,7 +581,22 @@ class SecuritySessionRepository(
                 alert.copy(decision = LoginAlertDecision.REJECTED_NOT_ME)
             } else alert
         }
+        cloudLoginAlerts = cloudLoginAlerts.map { alert ->
+            if (alert.id == alertId) alert.copy(decision = LoginAlertDecision.REJECTED_NOT_ME) else alert
+        }
         markAlertRead(alertId)
+
+        firestore.collection(COLLECTION_LOGIN_ALERTS)
+            .document(alertId)
+            .update(
+                mapOf(
+                    "decision" to LoginAlertDecision.REJECTED_NOT_ME.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnFailureListener { e ->
+                Log.w(TAG, "Failed to reject loginAlert $alertId in Firestore", e)
+            }
 
         val sessionIdToRevoke = targetSessionId
         if (!sessionIdToRevoke.isNullOrBlank()) {
@@ -293,13 +627,28 @@ class SecuritySessionRepository(
             ?: return Result.failure(IllegalStateException("Please sign in again before deleting notifications."))
         val mySessionId = currentSessionId(currentUser.uid)
 
-        val keepAlertId = LoginSecurityAlert.findCurrentStatusAlertId(_alerts.value, mySessionId)
-        val deletedIds = _alerts.value
-            .filter { it.id != keepAlertId }
-            .map { it.id }
-            .toSet()
+        val currentAlerts = _alerts.value
+        val keepAlertId = LoginSecurityAlert.findCurrentStatusAlertId(currentAlerts, mySessionId)
+        val alertsToDelete = currentAlerts.filter { it.id != keepAlertId }
+        val deletedIds = alertsToDelete.map { it.id }.toSet()
 
-        _alerts.value = _alerts.value.filter { it.id == keepAlertId }
+        // Delete from Firestore collections in batches
+        alertsToDelete.forEach { alert ->
+            val collection = if (alert.isUnauthorizedAttempt) {
+                COLLECTION_ADMIN_LOGIN_ATTEMPTS
+            } else {
+                COLLECTION_LOGIN_ALERTS
+            }
+            runCatching {
+                firestore.collection(collection).document(alert.id).delete().await()
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to delete $collection/${alert.id}", err)
+            }
+        }
+
+        cloudLoginAlerts = cloudLoginAlerts.filter { it.id == keepAlertId }
+        cloudAttemptAlerts = emptyList()
+        _alerts.value = currentAlerts.filter { it.id == keepAlertId }
         val updatedReadIds = if (keepAlertId != null && _readAlertIds.value.contains(keepAlertId)) {
             setOf(keepAlertId)
         } else {
@@ -388,33 +737,49 @@ class SecuritySessionRepository(
 
         val email = user.email.orEmpty().trim().take(254)
         val now = System.currentTimeMillis()
-        persistLocalAuthenticator(
-            LocalAuthenticatorConfig(
-                enabled = true,
-                requireOnLogin = true,
-                secretBase32 = cleanSecret,
-                accountLabel = email,
-                updatedByEmail = email,
-                updatedAtMillis = now
-            )
+        val payload = mapOf(
+            "enabled" to true,
+            "requireOnLogin" to true,
+            "secretBase32" to cleanSecret,
+            "accountLabel" to email,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
         )
-        activeTotpSecret = cleanSecret
-        failedTotpAttempts = 0
-        totpLockoutUntilMillis = 0L
-        _authenticatorStatus.value = AuthenticatorStatus(
+        try {
+            firestore.collection(COLLECTION_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to sync authenticator config to Firestore", e)
+            return Result.failure(
+                IllegalStateException(
+                    "Unable to save Authenticator setting to cloud: ${e.localizedMessage ?: "Please try again."}"
+                )
+            )
+        }
+
+        val config = LocalAuthenticatorConfig(
             enabled = true,
             requireOnLogin = true,
+            secretBase32 = cleanSecret,
             accountLabel = email,
             updatedByEmail = email,
-            updatedAtMillis = now,
-            isLoaded = true
+            updatedAtMillis = now
         )
+        applyCloudAuthenticatorConfig(config)
+        failedTotpAttempts = 0
+        totpLockoutUntilMillis = 0L
+
         val sessionAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
             ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
         if (sessionAuthSeconds > 0L) {
             LoginTwoFactorStore.markSessionVerified(appContext, user.uid, sessionAuthSeconds)
         }
-        return Result.success("Google Authenticator enabled on this device.")
+        return Result.success("Google Authenticator enabled across all devices.")
     }
 
     suspend fun disableAuthenticator(verificationCode: String): Result<String> {
@@ -435,28 +800,43 @@ class SecuritySessionRepository(
 
         val email = user.email.orEmpty().trim().take(254)
         val now = System.currentTimeMillis()
-        persistLocalAuthenticator(
-            LocalAuthenticatorConfig(
-                enabled = false,
-                requireOnLogin = false,
-                secretBase32 = "",
-                accountLabel = email,
-                updatedByEmail = email,
-                updatedAtMillis = now
-            )
+        val payload = mapOf(
+            "enabled" to false,
+            "requireOnLogin" to false,
+            "secretBase32" to "",
+            "accountLabel" to email,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
         )
-        activeTotpSecret = ""
-        failedTotpAttempts = 0
-        totpLockoutUntilMillis = 0L
-        _authenticatorStatus.value = AuthenticatorStatus(
+        try {
+            firestore.collection(COLLECTION_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to disable authenticator in Firestore", e)
+            return Result.failure(
+                IllegalStateException(
+                    "Unable to disable Authenticator in cloud: ${e.localizedMessage ?: "Please try again."}"
+                )
+            )
+        }
+
+        val config = LocalAuthenticatorConfig(
             enabled = false,
             requireOnLogin = false,
+            secretBase32 = "",
             accountLabel = email,
             updatedByEmail = email,
-            updatedAtMillis = now,
-            isLoaded = true
+            updatedAtMillis = now
         )
-        return Result.success("Google Authenticator disabled.")
+        applyCloudAuthenticatorConfig(config)
+        failedTotpAttempts = 0
+        totpLockoutUntilMillis = 0L
+        return Result.success("Google Authenticator disabled across all devices.")
     }
 
     suspend fun setRequireAuthenticatorOnLogin(
@@ -499,29 +879,48 @@ class SecuritySessionRepository(
 
         val email = user.email.orEmpty().trim().take(254)
         val now = System.currentTimeMillis()
-        persistLocalAuthenticator(
-            LocalAuthenticatorConfig(
-                enabled = true,
-                requireOnLogin = requireOnLogin,
-                secretBase32 = secret,
-                accountLabel = currentStatus.accountLabel.ifBlank { email }.take(254),
-                updatedByEmail = email,
-                updatedAtMillis = now
+        val label = currentStatus.accountLabel.ifBlank { email }.take(254)
+        val payload = mapOf(
+            "enabled" to true,
+            "requireOnLogin" to requireOnLogin,
+            "secretBase32" to secret,
+            "accountLabel" to label,
+            "issuer" to TotpAuthenticator.DEFAULT_ISSUER,
+            "updatedByEmail" to email,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        try {
+            firestore.collection(COLLECTION_CONFIG)
+                .document(DOC_AUTHENTICATOR)
+                .set(payload)
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update requireOnLogin in Firestore", e)
+            return Result.failure(
+                IllegalStateException(
+                    "Unable to update login verification setting: ${e.localizedMessage ?: "Please try again."}"
+                )
             )
-        )
-        _authenticatorStatus.value = currentStatus.copy(
+        }
+
+        val config = LocalAuthenticatorConfig(
+            enabled = true,
             requireOnLogin = requireOnLogin,
+            secretBase32 = secret,
+            accountLabel = label,
             updatedByEmail = email,
-            updatedAtMillis = now,
-            isLoaded = true
+            updatedAtMillis = now
         )
+        applyCloudAuthenticatorConfig(config)
         return if (requireOnLogin) {
             val sessionAuthSeconds = (currentAuthTimeMillis / 1000L).takeIf { it > 0L }
                 ?: ((user.metadata?.lastSignInTimestamp ?: 0L) / 1000L)
             if (sessionAuthSeconds > 0L) {
                 LoginTwoFactorStore.markSessionVerified(appContext, user.uid, sessionAuthSeconds)
             }
-            Result.success("Authentication code for login enabled.")
+            Result.success("Authentication code for login enabled across all devices.")
         } else {
             Result.success("Authentication code for login disabled.")
         }
@@ -581,6 +980,19 @@ class SecuritySessionRepository(
         val currentId = currentSessionId()
         _sessions.value = _sessions.value.filterNot { it.id == sessionId }
         saveLocalPrefs()
+
+        firestore.collection(COLLECTION_ADMIN_SESSIONS)
+            .document(sessionId)
+            .update(
+                mapOf(
+                    "status" to AdminDeviceStatus.REVOKED.value,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .addOnFailureListener { e ->
+                Log.w(TAG, "Failed to revoke session $sessionId in Firestore", e)
+            }
+
         if (sessionId == currentId) {
             _isCurrentSessionRevoked.value = true
         }
@@ -670,6 +1082,17 @@ class SecuritySessionRepository(
     suspend fun markCurrentSessionSignedOut() = withContext(NonCancellable) {
         val myId = currentSessionId()
         stopObservingCloudSecurity()
+        runCatching {
+            firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                .document(myId)
+                .update(
+                    mapOf(
+                        "status" to AdminDeviceStatus.REVOKED.value,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+        }
         _sessions.value = _sessions.value.filterNot { it.id == myId }
         prefs.edit()
             .remove(KEY_LOGIN_AT_MILLIS)
@@ -695,11 +1118,49 @@ class SecuritySessionRepository(
         }
 
         val myId = currentSessionId(currentUser.uid)
-        val beforeCount = _sessions.value.size
+        var removedCount = 0
+
+        // Fetch fresh active sessions from Firestore and revoke every session EXCEPT this device.
+        // Note: We intentionally do NOT advance config/security.forceSignOutBefore here because
+        // firestore.rules enforces forceSignOutBefore against this device's own auth_time as well.
+        val snap = runCatching {
+            firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                .whereEqualTo("status", AdminDeviceStatus.ACTIVE.value)
+                .get(Source.SERVER)
+                .await()
+        }.getOrNull()
+
+        val otherSessionIds = HashSet<String>()
+        snap?.documents?.forEach { doc ->
+            val devId = doc.getString("deviceId").orEmpty()
+            if (doc.id != myId && devId != localDeviceId) {
+                otherSessionIds.add(doc.id)
+            }
+        }
+        _sessions.value.forEach { session ->
+            if (!session.isCurrentDevice && session.id != myId && session.deviceId != localDeviceId) {
+                otherSessionIds.add(session.id)
+            }
+        }
+
+        otherSessionIds.forEach { targetId ->
+            val revoked = runCatching {
+                firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                    .document(targetId)
+                    .update(
+                        mapOf(
+                            "status" to AdminDeviceStatus.REVOKED.value,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    .await()
+            }.isSuccess
+            if (revoked) removedCount++
+        }
+
         _sessions.value = _sessions.value.filter { it.id == myId || it.isCurrentDevice }
         saveLocalPrefs()
-        val removed = (beforeCount - _sessions.value.size).coerceAtLeast(0)
-        return Result.success(removed)
+        return Result.success(removedCount)
     }
 
     suspend fun revokeActiveSessionsForEmail(
@@ -715,19 +1176,180 @@ class SecuritySessionRepository(
         }
 
         val myId = currentSessionId(currentUser.uid)
-        val beforeCount = _sessions.value.size
-        _sessions.value = _sessions.value.filterNot { session ->
-            !session.isCurrentDevice &&
-                session.id != myId &&
-                session.deviceId != localDeviceId &&
+        val targetIds = HashSet<String>()
+
+        if (cleanTargetSessionId.isNotEmpty() && cleanTargetSessionId != myId) {
+            targetIds.add(cleanTargetSessionId)
+        }
+
+        val snap = runCatching {
+            firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                .whereEqualTo("status", AdminDeviceStatus.ACTIVE.value)
+                .get(Source.SERVER)
+                .await()
+        }.getOrNull()
+
+        snap?.documents?.forEach { doc ->
+            val docEmail = doc.getString("email").orEmpty().trim().lowercase(Locale.US)
+            val devId = doc.getString("deviceId").orEmpty()
+            if (doc.id != myId && devId != localDeviceId &&
                 (
-                    (cleanTargetSessionId.isNotEmpty() && session.id == cleanTargetSessionId) ||
-                        (normalizedTargetEmail.isNotEmpty() && session.email.trim().equals(normalizedTargetEmail, ignoreCase = true))
+                    (cleanTargetSessionId.isNotEmpty() && doc.id == cleanTargetSessionId) ||
+                        (normalizedTargetEmail.isNotEmpty() && docEmail == normalizedTargetEmail)
                     )
+            ) {
+                targetIds.add(doc.id)
+            }
+        }
+
+        var removed = 0
+        targetIds.forEach { targetId ->
+            val ok = runCatching {
+                firestore.collection(COLLECTION_ADMIN_SESSIONS)
+                    .document(targetId)
+                    .update(
+                        mapOf(
+                            "status" to AdminDeviceStatus.REVOKED.value,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    .await()
+            }.isSuccess
+            if (ok) removed++
+        }
+
+        _sessions.value = _sessions.value.filterNot { session ->
+            session.id in targetIds
         }
         saveLocalPrefs()
-        val removed = (beforeCount - _sessions.value.size).coerceAtLeast(0)
         return Result.success(removed)
+    }
+
+    private suspend fun upsertSessionInCloud(
+        user: FirebaseUser,
+        session: ActiveDeviceSession
+    ) {
+        val docRef = firestore.collection(COLLECTION_ADMIN_SESSIONS).document(session.id)
+        val userAgent = "AlifCarImportAdmin/Android ${Build.VERSION.RELEASE} (${Build.MANUFACTURER} ${Build.MODEL})".take(300)
+        val existing = runCatching { docRef.get().await() }.getOrNull()
+        val canPartialUpdate = existing != null &&
+            existing.exists() &&
+            existing.getString("uid") == user.uid &&
+            existing.getString("deviceId") == session.deviceId &&
+            existing.getTimestamp("createdAt") != null
+
+        if (canPartialUpdate) {
+            val updateResult = runCatching {
+                docRef.update(
+                    mapOf(
+                        "deviceName" to session.deviceName.take(160),
+                        "platform" to session.platform.take(60),
+                        "email" to session.email.take(254),
+                        "location" to session.location.ifBlank { fallbackLocaleLocation() }.take(160),
+                        "loginAtMillis" to session.loginAtMillis,
+                        "lastActiveMillis" to session.lastActiveMillis,
+                        "status" to AdminDeviceStatus.ACTIVE.value,
+                        "userAgent" to userAgent,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+            if (updateResult.isSuccess) return
+        }
+
+        runCatching {
+            docRef.set(
+                mapOf(
+                    "id" to session.id,
+                    "uid" to user.uid,
+                    "deviceId" to session.deviceId.take(128),
+                    "deviceName" to session.deviceName.take(160),
+                    "platform" to session.platform.take(60),
+                    "email" to session.email.take(254),
+                    "location" to session.location.ifBlank { fallbackLocaleLocation() }.take(160),
+                    "loginAtMillis" to session.loginAtMillis,
+                    "lastActiveMillis" to session.lastActiveMillis,
+                    "status" to AdminDeviceStatus.ACTIVE.value,
+                    "userAgent" to userAgent,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        }.onFailure { err ->
+            Log.w(TAG, "Failed to write adminSession ${session.id} to Firestore", err)
+        }
+    }
+
+    private suspend fun writeLoginAlertToCloud(
+        user: FirebaseUser,
+        alert: LoginSecurityAlert,
+        isOwnerAuthVerified: Boolean
+    ): Boolean {
+        val docRef = firestore.collection(COLLECTION_LOGIN_ALERTS).document(alert.id)
+        val attemptType = if (isOwnerAuthVerified) {
+            LoginSecurityAlert.ATTEMPT_TYPE_AUTHENTICATOR_VERIFIED
+        } else {
+            "admin_login"
+        }
+        val payload = mapOf(
+            "id" to alert.id,
+            "sessionId" to alert.sessionId,
+            "uid" to user.uid,
+            "email" to alert.email.take(254),
+            "deviceName" to alert.deviceName.ifBlank { "Android Device" }.take(160),
+            "platform" to alert.platform.ifBlank { "Mobile App" }.take(60),
+            "location" to alert.location.ifBlank { fallbackLocaleLocation() }.take(160),
+            "timestampMillis" to alert.timestampMillis,
+            "decision" to LoginAlertDecision.PENDING.value,
+            "sourcePage" to "/admin",
+            "attemptType" to attemptType,
+            "browser" to "Mobile App",
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val created = runCatching {
+            docRef.set(payload).await()
+        }.onFailure { err ->
+            Log.w(TAG, "Failed to create loginAlert ${alert.id} in Firestore", err)
+        }.isSuccess
+
+        if (created && isOwnerAuthVerified) {
+            runCatching {
+                docRef.update(
+                    mapOf(
+                        "decision" to LoginAlertDecision.CONFIRMED_ME.value,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        }
+        return created
+    }
+
+    private fun rebuildMergedAlerts() {
+        val mergedById = LinkedHashMap<String, LoginSecurityAlert>()
+        (cloudLoginAlerts + cloudAttemptAlerts).forEach { alert ->
+            mergedById[alert.id] = alert
+        }
+        val sorted = mergedById.values
+            .filter { it.isAdminPageEvent && !it.id.startsWith(SYNTHETIC_ALERT_PREFIX) }
+            .sortedByDescending { it.timestampMillis }
+            .take(50)
+        _alerts.value = sorted
+        saveLocalPrefs()
+    }
+
+    private fun applyCloudAuthenticatorConfig(config: LocalAuthenticatorConfig) {
+        persistLocalAuthenticator(appContext, config)
+        activeTotpSecret = if (config.enabled) config.secretBase32 else ""
+        _authenticatorStatus.value = AuthenticatorStatus(
+            enabled = config.enabled,
+            requireOnLogin = config.requireOnLogin,
+            accountLabel = config.accountLabel,
+            updatedByEmail = config.updatedByEmail,
+            updatedAtMillis = config.updatedAtMillis,
+            isLoaded = true
+        )
     }
 
     private fun upsertLocalSession(session: ActiveDeviceSession) {
@@ -745,7 +1367,7 @@ class SecuritySessionRepository(
         val filtered = _alerts.value.filterNot { it.id == alert.id }
         _alerts.value = (listOf(alert) + filtered)
             .sortedByDescending { it.timestampMillis }
-            .take(40)
+            .take(50)
         saveLocalPrefs()
     }
 
@@ -758,17 +1380,6 @@ class SecuritySessionRepository(
     }
 
     private fun loadStoredLoginAt(): Long = prefs.getLong(KEY_LOGIN_AT_MILLIS, 0L)
-
-    private fun persistLocalAuthenticator(config: LocalAuthenticatorConfig) {
-        prefs.edit()
-            .putBoolean(KEY_AUTH_ENABLED, config.enabled)
-            .putBoolean(KEY_AUTH_REQUIRE_ON_LOGIN, config.requireOnLogin)
-            .putString(KEY_AUTH_SECRET, config.secretBase32)
-            .putString(KEY_AUTH_LABEL, config.accountLabel)
-            .putString(KEY_AUTH_UPDATED_BY, config.updatedByEmail)
-            .putLong(KEY_AUTH_UPDATED_AT, config.updatedAtMillis)
-            .apply()
-    }
 
     private fun loadFromLocalPrefs() {
         val authCfg = readLocalAuthenticatorConfig(appContext)
@@ -858,7 +1469,7 @@ class SecuritySessionRepository(
                 _alerts.value = list
                     .filter { it.isAdminPageEvent && !it.id.startsWith(SYNTHETIC_ALERT_PREFIX) }
                     .sortedByDescending { it.timestampMillis }
-                    .take(40)
+                    .take(50)
             }
         }
 
@@ -886,7 +1497,7 @@ class SecuritySessionRepository(
         }
 
         val alertsArr = JSONArray()
-        _alerts.value.take(40).forEach { a ->
+        _alerts.value.take(50).forEach { a ->
             alertsArr.put(
                 JSONObject().apply {
                     put("id", a.id)
@@ -912,56 +1523,6 @@ class SecuritySessionRepository(
             .apply()
     }
 
-    private fun buildDeviceDisplayName(): String {
-        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
-            .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
-        val model = Build.MODEL.orEmpty().trim()
-        val combined = if (model.startsWith(manufacturer, ignoreCase = true)) {
-            model
-        } else {
-            "$manufacturer $model".trim()
-        }
-        return "${combined.ifBlank { "Android Device" }} (Android ${Build.VERSION.RELEASE})"
-    }
-
-    private fun fallbackLocaleLocation(): String {
-        val country = Locale.getDefault().displayCountry.takeIf { it.isNotBlank() }
-        val tzCity = TimeZone.getDefault().id.substringAfter('/', "").replace('_', ' ')
-        return listOfNotNull(
-            tzCity.takeIf { it.isNotBlank() },
-            country
-        ).joinToString(", ").ifBlank { TimeZone.getDefault().id }
-    }
-
-    private suspend fun fetchIpCityCountry(): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            val conn = (URL("https://ipapi.co/json/").openConnection() as HttpURLConnection).apply {
-                connectTimeout = 2000
-                readTimeout = 2000
-                setRequestProperty("User-Agent", "AlifCarImportAdmin/1.0")
-            }
-            try {
-                if (conn.responseCode in 200..299) {
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
-                    val json = JSONObject(body)
-                    val city = json.optString("city").trim()
-                    val country = json.optString("country_name").trim()
-                    listOfNotNull(
-                        city.takeIf { it.isNotEmpty() },
-                        country.takeIf { it.isNotEmpty() }
-                    ).joinToString(", ").takeIf { it.isNotEmpty() }
-                } else {
-                    null
-                }
-            } finally {
-                conn.disconnect()
-            }
-        }.getOrNull()
-    }
-
-    private fun sanitizeIdPart(raw: String?): String =
-        raw.orEmpty().replace(ID_SANITIZE_REGEX, "")
-
     companion object {
         private const val TAG = "SecuritySessionRepo"
         private const val PREFS_NAME = "alif_security_prefs"
@@ -980,10 +1541,45 @@ class SecuritySessionRepository(
         private const val KEY_AUTH_UPDATED_AT = "local_auth_updated_at"
         private const val MAX_STORED_READ_ALERT_IDS = 200
 
+        const val COLLECTION_ADMIN_SESSIONS = "adminSessions"
+        const val COLLECTION_LOGIN_ALERTS = "loginAlerts"
+        const val COLLECTION_ADMIN_LOGIN_ATTEMPTS = "adminLoginAttempts"
+        const val COLLECTION_CONFIG = "config"
+        const val DOC_AUTHENTICATOR = "authenticator"
+        const val DOC_SECURITY = "security"
+
+        private const val MAX_OBSERVED_SESSIONS = 40L
+        private const val MAX_OBSERVED_ALERTS = 30L
+        private const val RECENT_ALERT_WINDOW_MILLIS = 5L * 60L * 1000L
+        private const val RECENT_ATTEMPT_WINDOW_MILLIS = 10L * 60L * 1000L
+
         private const val MAX_TOTP_ATTEMPTS_BEFORE_COOLDOWN = 5
         private const val TOTP_COOLDOWN_MILLIS = 30_000L
         private const val SYNTHETIC_ALERT_PREFIX = "sess_alert_"
         private val ID_SANITIZE_REGEX = Regex("[^a-zA-Z0-9_-]")
+
+        fun sanitizeIdPart(raw: String?): String =
+            raw.orEmpty().replace(ID_SANITIZE_REGEX, "")
+
+        fun getCurrentSessionIdForDevice(context: Context, uid: String?): String {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val deviceId = prefs.getString(KEY_DEVICE_ID, null).orEmpty()
+            val cleanUid = sanitizeIdPart(uid).ifBlank { "anon" }
+            val cleanDevice = sanitizeIdPart(deviceId).ifBlank { "device" }
+            return "sess_${cleanUid.take(10)}_${cleanDevice.take(12)}"
+        }
+
+        fun persistLocalAuthenticator(context: Context, config: LocalAuthenticatorConfig) {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit()
+                .putBoolean(KEY_AUTH_ENABLED, config.enabled)
+                .putBoolean(KEY_AUTH_REQUIRE_ON_LOGIN, config.requireOnLogin)
+                .putString(KEY_AUTH_SECRET, config.secretBase32)
+                .putString(KEY_AUTH_LABEL, config.accountLabel)
+                .putString(KEY_AUTH_UPDATED_BY, config.updatedByEmail)
+                .putLong(KEY_AUTH_UPDATED_AT, config.updatedAtMillis)
+                .apply()
+        }
 
         fun readLocalAuthenticatorConfig(context: Context): LocalAuthenticatorConfig {
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1003,6 +1599,235 @@ class SecuritySessionRepository(
                 updatedByEmail = prefs.getString(KEY_AUTH_UPDATED_BY, "").orEmpty().trim(),
                 updatedAtMillis = prefs.getLong(KEY_AUTH_UPDATED_AT, 0L)
             )
+        }
+
+        /**
+         * Fetches the authoritative 2FA config from Firestore (`config/authenticator`) with
+         * fallback to cache and local SharedPreferences, and mirrors the latest cloud value locally.
+         */
+        suspend fun fetchAuthenticatorConfigFromCloud(context: Context): LocalAuthenticatorConfig {
+            val db = FirestoreProvider.get(context)
+            val doc = runCatching {
+                db.collection(COLLECTION_CONFIG)
+                    .document(DOC_AUTHENTICATOR)
+                    .get(Source.SERVER)
+                    .await()
+            }.getOrElse {
+                runCatching {
+                    db.collection(COLLECTION_CONFIG)
+                        .document(DOC_AUTHENTICATOR)
+                        .get()
+                        .await()
+                }.getOrNull()
+            }
+
+            if (doc != null && doc.exists()) {
+                val parsed = parseAuthenticatorDoc(doc)
+                persistLocalAuthenticator(context, parsed)
+                return parsed
+            }
+            return readLocalAuthenticatorConfig(context)
+        }
+
+        /**
+         * Records a blocked/unauthorized or failed-password login attempt into Firestore
+         * `adminLoginAttempts` (open create rule in firestore.rules) so the owner's device
+         * immediately receives a push alert and Grant Admin Access action.
+         */
+        suspend fun recordAdminLoginAttemptToCloud(
+            context: Context,
+            email: String,
+            status: String,
+            reason: String,
+            sessionId: String = ""
+        ) {
+            val cleanEmail = email.trim().take(254)
+            val attemptId = "att_${UUID.randomUUID().toString().replace("-", "").take(14)}"
+            val now = System.currentTimeMillis()
+            val location = (fetchIpCityCountry() ?: fallbackLocaleLocation()).take(160)
+            val payload = mapOf(
+                "id" to attemptId,
+                "email" to cleanEmail,
+                "deviceName" to buildDeviceDisplayName().take(160),
+                "platform" to "Mobile App",
+                "sourcePage" to "/admin",
+                "location" to location,
+                "status" to status,
+                "attemptType" to "admin_login_attempt",
+                "browser" to "Mobile App",
+                "reason" to reason.take(240),
+                "sessionId" to sessionId.take(128),
+                "timestampMillis" to now,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            runCatching {
+                FirestoreProvider.get(context)
+                    .collection(COLLECTION_ADMIN_LOGIN_ATTEMPTS)
+                    .document(attemptId)
+                    .set(payload)
+                    .await()
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to log adminLoginAttempt for $cleanEmail", err)
+            }
+        }
+
+        fun parseAuthenticatorDoc(doc: DocumentSnapshot): LocalAuthenticatorConfig {
+            val enabled = doc.getBoolean("enabled") ?: false
+            val secret = doc.getString("secretBase32").orEmpty().trim()
+            val effectiveEnabled = enabled && TotpAuthenticator.isValidSecretBase32(secret)
+            val requireOnLogin = if (effectiveEnabled) {
+                if (doc.contains("requireOnLogin")) {
+                    doc.getBoolean("requireOnLogin") ?: true
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+            val updatedAt = doc.getTimestamp("updatedAt")?.toDate()?.time ?: 0L
+            return LocalAuthenticatorConfig(
+                enabled = effectiveEnabled,
+                requireOnLogin = requireOnLogin,
+                secretBase32 = if (effectiveEnabled) secret else "",
+                accountLabel = doc.getString("accountLabel").orEmpty().trim(),
+                updatedByEmail = doc.getString("updatedByEmail").orEmpty().trim(),
+                updatedAtMillis = updatedAt
+            )
+        }
+
+        fun parseAdminSessionDoc(
+            doc: DocumentSnapshot,
+            mySessionId: String,
+            localDeviceId: String
+        ): ActiveDeviceSession? {
+            val id = doc.getString("id").orEmpty().ifBlank { doc.id }
+            if (id.isBlank()) return null
+            val status = AdminDeviceStatus.fromValue(doc.getString("status"))
+            val devId = doc.getString("deviceId").orEmpty().ifBlank { id }
+            val devName = doc.getString("deviceName").orEmpty().ifBlank { "Admin Device" }
+            val plat = doc.getString("platform").orEmpty().ifBlank { "Website" }
+            val userAgent = doc.getString("userAgent")
+            val explicitBrowser = doc.getString("browser")
+            val browser = ActiveDeviceSession.resolveBrowserName(
+                explicitBrowser = explicitBrowser,
+                userAgent = userAgent,
+                deviceName = devName,
+                platform = plat
+            )
+            val createdMs = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L
+            val updatedMs = doc.getTimestamp("updatedAt")?.toDate()?.time ?: createdMs
+            val loginAtMillis = (doc.getLong("loginAtMillis") ?: 0L).takeIf { it > 0L } ?: createdMs
+            val lastActiveMillis = (doc.getLong("lastActiveMillis") ?: 0L).takeIf { it > 0L } ?: updatedMs
+            return ActiveDeviceSession(
+                id = id,
+                deviceId = devId,
+                deviceName = devName,
+                platform = plat,
+                email = doc.getString("email").orEmpty().trim(),
+                location = doc.getString("location").orEmpty().ifBlank { "Unknown location" },
+                loginAtMillis = loginAtMillis,
+                lastActiveMillis = lastActiveMillis,
+                status = status,
+                isCurrentDevice = id == mySessionId || (localDeviceId.isNotBlank() && devId == localDeviceId),
+                browser = browser
+            )
+        }
+
+        fun parseLoginAlertDoc(doc: DocumentSnapshot): LoginSecurityAlert? {
+            val id = doc.getString("id").orEmpty().ifBlank { doc.id }
+            if (id.isBlank()) return null
+            val tsMillis = (doc.getLong("timestampMillis") ?: 0L).takeIf { it > 0L }
+                ?: doc.getTimestamp("createdAt")?.toDate()?.time
+                ?: System.currentTimeMillis()
+            val attemptType = doc.getString("attemptType").orEmpty()
+            val verified2fa = LoginSecurityAlert.isAuthenticatorVerifiedAttemptType(attemptType)
+            return LoginSecurityAlert(
+                id = id,
+                sessionId = doc.getString("sessionId").orEmpty(),
+                email = doc.getString("email").orEmpty().trim(),
+                deviceName = doc.getString("deviceName").orEmpty().ifBlank { "Admin Device" },
+                platform = doc.getString("platform").orEmpty().ifBlank { "Website" },
+                location = doc.getString("location").orEmpty().ifBlank { "Unknown location" },
+                timestampMillis = tsMillis,
+                decision = LoginAlertDecision.fromValue(doc.getString("decision")),
+                sourcePage = doc.getString("sourcePage").orEmpty().ifBlank { "/admin" },
+                isUnauthorizedAttempt = false,
+                verifiedWithAuthenticator = verified2fa
+            )
+        }
+
+        fun parseAdminAttemptDoc(doc: DocumentSnapshot): LoginSecurityAlert? {
+            val id = doc.getString("id").orEmpty().ifBlank { doc.id }
+            if (id.isBlank()) return null
+            val tsMillis = (doc.getLong("timestampMillis") ?: 0L).takeIf { it > 0L }
+                ?: doc.getTimestamp("createdAt")?.toDate()?.time
+                ?: System.currentTimeMillis()
+            val sourcePage = doc.getString("sourcePage")
+                ?.takeIf { it.isNotBlank() }
+                ?: doc.getString("page")?.takeIf { it.isNotBlank() }
+                ?: "/admin"
+            return LoginSecurityAlert(
+                id = id,
+                sessionId = doc.getString("sessionId").orEmpty(),
+                email = doc.getString("email").orEmpty().trim(),
+                deviceName = doc.getString("deviceName").orEmpty().ifBlank { "Unknown Device" },
+                platform = doc.getString("platform").orEmpty().ifBlank { "Website Admin" },
+                location = doc.getString("location").orEmpty().ifBlank { "Unknown location" },
+                timestampMillis = tsMillis,
+                decision = LoginAlertDecision.REJECTED_NOT_ME,
+                sourcePage = sourcePage,
+                isUnauthorizedAttempt = true,
+                verifiedWithAuthenticator = false,
+                failureReason = doc.getString("reason").orEmpty().trim(),
+                attemptStatus = doc.getString("status").orEmpty().trim()
+            )
+        }
+
+        fun buildDeviceDisplayName(): String {
+            val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+                .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+            val model = Build.MODEL.orEmpty().trim()
+            val combined = if (model.startsWith(manufacturer, ignoreCase = true)) {
+                model
+            } else {
+                "$manufacturer $model".trim()
+            }
+            return "${combined.ifBlank { "Android Device" }} (Android ${Build.VERSION.RELEASE})"
+        }
+
+        fun fallbackLocaleLocation(): String {
+            val country = Locale.getDefault().displayCountry.takeIf { it.isNotBlank() }
+            val tzCity = TimeZone.getDefault().id.substringAfter('/', "").replace('_', ' ')
+            return listOfNotNull(
+                tzCity.takeIf { it.isNotBlank() },
+                country
+            ).joinToString(", ").ifBlank { TimeZone.getDefault().id }
+        }
+
+        suspend fun fetchIpCityCountry(): String? = withContext(Dispatchers.IO) {
+            runCatching {
+                val conn = (URL("https://ipapi.co/json/").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 2000
+                    readTimeout = 2000
+                    setRequestProperty("User-Agent", "AlifCarImportAdmin/1.0")
+                }
+                try {
+                    if (conn.responseCode in 200..299) {
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        val json = JSONObject(body)
+                        val city = json.optString("city").trim()
+                        val country = json.optString("country_name").trim()
+                        listOfNotNull(
+                            city.takeIf { it.isNotEmpty() },
+                            country.takeIf { it.isNotEmpty() }
+                        ).joinToString(", ").takeIf { it.isNotEmpty() }
+                    } else {
+                        null
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }.getOrNull()
         }
     }
 }
